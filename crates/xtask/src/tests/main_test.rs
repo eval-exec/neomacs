@@ -645,6 +645,60 @@ printf 'args=%s\nemacs=%s\nhome=%s\n' "$*" "$EMACS" "$HOME" > "$DOOM_TEST_REPORT
     assert!(!report.contains(&format!("home={}\n", caller_home.display())));
 }
 
+/// Every way a nextest config can make a test wait for pool slots: a
+/// `threads-required` on a profile or override (any value: a number, including
+/// one equal to the pool, `"num-cpus"` or `"num-test-threads"`), a
+/// `test-group` assignment, a `max-threads` key, any `[test-groups]` table,
+/// or a profile with `test-threads = 1`.  Parsed as TOML, so comments, spacing and
+/// inline-table overrides cannot hide a key.
+fn nextest_pool_slot_reservations(nextest: &str) -> Vec<String> {
+    const RESERVATION_KEYS: [&str; 3] = ["threads-required", "test-group", "max-threads"];
+    let config: toml::Table = toml::from_str(nextest).expect("nextest config parses as TOML");
+    let mut found = Vec::new();
+    if let Some(groups) = config.get("test-groups") {
+        found.push(format!("[test-groups] = {groups}"));
+    }
+    let Some(profiles) = config.get("profile").and_then(toml::Value::as_table) else {
+        return found;
+    };
+    for (name, profile) in profiles {
+        let Some(profile) = profile.as_table() else {
+            continue;
+        };
+        if profile
+            .get("test-threads")
+            .and_then(toml::Value::as_integer)
+            == Some(1)
+        {
+            found.push(format!("[profile.{name}] test-threads = 1"));
+        }
+        for key in RESERVATION_KEYS {
+            if let Some(value) = profile.get(key) {
+                found.push(format!("[profile.{name}] {key} = {value}"));
+            }
+        }
+        let overrides = profile
+            .get("overrides")
+            .and_then(toml::Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for entry in overrides.iter().filter_map(toml::Value::as_table) {
+            for key in RESERVATION_KEYS {
+                if let Some(value) = entry.get(key) {
+                    let filter = entry
+                        .get("filter")
+                        .map(ToString::to_string)
+                        .unwrap_or_default();
+                    found.push(format!(
+                        "[profile.{name}.overrides] {filter}: {key} = {value}"
+                    ));
+                }
+            }
+        }
+    }
+    found
+}
+
 #[test]
 fn nextest_never_reserves_the_whole_test_pool() {
     let nextest = include_str!(concat!(
@@ -654,15 +708,53 @@ fn nextest_never_reserves_the_whole_test_pool() {
     assert!(nextest.contains("filter = 'package(neomacs-melpa-tests)'"));
     // Every test runs in parallel: a family that is sensitive to contention
     // must have its test fixed, not reserve pool slots (whole or numeric).
-    let reserving: Vec<&str> = nextest
-        .lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .filter(|line| line.contains("threads-required") || line.contains("num-test-threads"))
-        .collect();
+    let reserving = nextest_pool_slot_reservations(nextest);
     assert!(
         reserving.is_empty(),
         "pool-slot reservations: {reserving:?}"
     );
+}
+
+#[test]
+fn nextest_pool_slot_guard_rejects_every_reservation_shape() {
+    let rejected = [
+        // numeric, below the pool
+        "[[profile.default.overrides]]\nfilter = 'test(a)'\nthreads-required = 4\n",
+        // numeric, equal to the pool: drains it like num-test-threads
+        "[profile.default]\ntest-threads = 24\n[[profile.default.overrides]]\nfilter = 'test(a)'\nthreads-required = 24\n",
+        "[[profile.default.overrides]]\nfilter = 'test(a)'\nthreads-required = \"num-cpus\"\n",
+        "[[profile.default.overrides]]\nfilter = 'test(a)'\nthreads-required = \"num-test-threads\"\n",
+        // a non-default profile
+        "[[profile.oracle-slow.overrides]]\nfilter = 'test(a)'\nthreads-required = 2\n",
+        // on the profile itself
+        "[profile.ci]\nthreads-required = 2\n",
+        // test groups
+        "[test-groups]\nserial = { max-threads = 1 }\n",
+        "[[profile.default.overrides]]\nfilter = 'test(a)'\ntest-group = 'serial'\n",
+        "[[profile.default.overrides]]\nfilter = 'test(a)'\nmax-threads = 1\n",
+        // a sequential profile
+        "[profile.ci]\ntest-threads = 1\n",
+        // inline-table overrides and odd spacing
+        "[profile.default]\noverrides = [ { filter = 'test(a)', \"threads-required\"=3 } ]\n",
+    ];
+    for shape in rejected {
+        assert!(
+            !nextest_pool_slot_reservations(shape).is_empty(),
+            "guard accepted a reservation shape:\n{shape}"
+        );
+    }
+    let accepted = [
+        "[profile.default]\ntest-threads = 24\n",
+        "[profile.default]\ntest-threads = \"num-cpus\"\n",
+        "# threads-required = 4 in a comment is not a key\n[[profile.default.overrides]]\nfilter = 'test(a)'\nslow-timeout = { period = \"60s\", terminate-after = 1 }\n",
+    ];
+    for shape in accepted {
+        assert_eq!(
+            nextest_pool_slot_reservations(shape),
+            Vec::<String>::new(),
+            "guard rejected a non-reservation:\n{shape}"
+        );
+    }
 }
 
 #[test]
