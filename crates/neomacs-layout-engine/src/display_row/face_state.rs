@@ -184,15 +184,24 @@ impl DisplayRowFaceMetrics {
 }
 
 impl DisplayRowFace {
+    pub(crate) fn effective_font_slant(&self) -> neovm_core::face::FontSlant {
+        if self.italic && !self.font_slant.is_italic() {
+            neovm_core::face::FontSlant::Italic
+        } else {
+            self.font_slant
+        }
+    }
+
     pub(crate) fn font_selection(&self) -> crate::font::metrics::RealizedFaceFontSelection<'_> {
+        let slant = self.effective_font_slant();
         crate::font::metrics::RealizedFaceFontSelection::new(
             &self.font_family,
             self.font_weight,
-            self.italic,
+            slant.is_italic(),
             self.font_size.max(1.0),
         )
         .with_foundry(self.font_foundry.as_deref())
-        .with_slant(self.font_slant)
+        .with_slant(slant)
         .with_width(self.font_width)
     }
 
@@ -203,6 +212,7 @@ impl DisplayRowFace {
         } else {
             std::sync::Arc::clone(&face.font_family)
         };
+        let font_slant = face.effective_font_slant();
         Self {
             face_id,
             tty_space_identity: face.tty_space_identity,
@@ -218,8 +228,8 @@ impl DisplayRowFace {
             font_foundry: face.font_foundry.clone(),
             font_file_path: None,
             font_weight: face.font_weight,
-            italic: face.italic,
-            font_slant: face.font_slant,
+            italic: font_slant.is_italic(),
+            font_slant,
             font_width: face.font_width,
             font_size: face.font_size,
             underline_style: face.underline_style,
@@ -286,7 +296,7 @@ impl DisplayRowFace {
         if self.font_weight >= 700 {
             attrs |= FaceAttributes::BOLD;
         }
-        if self.italic {
+        if self.effective_font_slant().is_italic() {
             attrs |= FaceAttributes::ITALIC;
         }
         if underline_style != UnderlineStyle::None {
@@ -348,7 +358,7 @@ impl DisplayRowFace {
             stipple: self.stipple.clone(),
             underline_placement: self.underline_position,
             font_foundry: self.font_foundry.clone(),
-            font_slant: Some(self.font_slant.gnu_numeric()),
+            font_slant: Some(self.effective_font_slant().gnu_numeric()),
             font_width: Some(self.font_width.gnu_numeric()),
         }
     }
@@ -512,18 +522,9 @@ impl<'a> DisplayRowFaceRealizer<'a> {
     }
 
     fn measured_font_metrics_for_face(&mut self, face: &DisplayRowFace) -> Option<FontMetrics> {
-        self.font_metrics.as_mut().map(|svc| {
-            let selection = crate::font::metrics::RealizedFaceFontSelection::new(
-                &face.font_family,
-                face.font_weight,
-                face.italic,
-                face.font_size,
-            )
-            .with_foundry(face.font_foundry.as_deref())
-            .with_slant(face.font_slant)
-            .with_width(face.font_width);
-            svc.font_metrics_for_selection(selection)
-        })
+        self.font_metrics
+            .as_mut()
+            .map(|svc| svc.font_metrics_for_selection(face.font_selection()))
     }
 
     pub(crate) fn font_metrics_service_mut(&mut self) -> Option<&mut FontMetricsService> {

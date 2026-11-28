@@ -98,10 +98,11 @@ pub fn ensure_startup_compat_variables(eval: &mut neovm_eval::emacs_core::eval::
     }
 
     // Rehydrate process-global alternative font family/registry tables from
-    // the pdump-restored Lisp variables (`faces.el:150`, `xfaces.c:6956`).
-    // GNU stores these in GC-rooted `Vface_alternative_font_*_alist`, so they
-    // survive dumping; Neomacs holds them in process-local statics that start
-    // empty after loading a dump image. Never reset `FACE_ATTR_STATE` here:
+    // the pdump-restored Lisp variables (`faces.el:150`, `xfaces.c:317, 323,
+    // 5880, 5908`). GNU stores these in GC-rooted
+    // `Vface_alternative_font_*_alist`, so they survive dumping; Neomacs holds
+    // them in process-local statics that start empty after loading a dump
+    // image. Never reset `FACE_ATTR_STATE` here:
     // `restore_created_faces_from_table` has already repopulated
     // `created_lisp_faces` for the dumped faces.
     rehydrate_alternative_font_alists(eval);
@@ -111,15 +112,13 @@ fn rehydrate_alternative_font_alists(eval: &mut neovm_eval::emacs_core::eval::Co
     if let Some(value) = eval
         .obarray()
         .canonical_value_by_name(CanonicalAccess::BOOTSTRAP, "face-font-family-alternatives")
-        && !value.is_nil()
     {
         let _ = apply_alternative_font_family_alist(eval, value);
     }
     if let Some(value) = eval.obarray().canonical_value_by_name(
         CanonicalAccess::BOOTSTRAP,
         "face-font-registry-alternatives",
-    ) && !value.is_nil()
-    {
+    ) {
         let _ = apply_alternative_font_registry_alist(value);
     }
 }
@@ -6057,9 +6056,9 @@ fn apply_alternative_font_registry_alist(raw: Value) -> EvalResult {
         normalized.push(Value::list(converted));
     }
     // GNU `xfaces.c:5909` invalidates realized faces without resetting Lisp face
-    // definitions in `FACE_ATTR_STATE`.
+    // definitions in `FACE_ATTR_STATE`. `replace_alternative_font_registry_alist`
+    // bumps `fontset_generation` under the registry write lock.
     replace_alternative_font_registry_alist(alist);
-    crate::emacs_core::fontset::invalidate_font_selection_policy();
     Ok(Value::list(normalized))
 }
 

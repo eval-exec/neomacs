@@ -4977,7 +4977,12 @@ fn backward_bridge_stops_acquisition_at_existing_coverage() {
 #[test]
 fn backward_bridge_preserves_its_connected_tail_when_taller_than_the_viewport() {
     let line = format!("{}\n", "wrapped offscreen text ".repeat(6));
-    backward_bridge_connects(&line, 320, 200);
+    // With the standard fixture catalog's primary monospace face (Noto Sans Mono
+    // at 16px: char_width=10, char_height=23), 400px gives 38 text columns
+    // (384 / 10), wrapping one 139-char line into 4 visual rows (92px < 154px
+    // body) so backward headroom stays above the 2-row urgent threshold while
+    // the 4-line bridge (16 rows = 368px) remains taller than the 200px viewport.
+    backward_bridge_connects(&line, 400, 200);
 }
 
 fn backward_bridge_connects(line: &str, width: u32, height: u32) {
@@ -4996,6 +5001,31 @@ fn backward_bridge_connects(line: &str, width: u32, height: u32) {
     );
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
+    // Pin the standard fixture catalog's primary monospace face and cell
+    // geometry that the 400x200 wrapped-bridge geometry depends on, so any
+    // future font-resolution change fails loudly instead of shifting column
+    // wrap counts silently.
+    {
+        let frame_state = eval.frame_manager().get(frame).unwrap();
+        assert_eq!(
+            (frame_state.char_width, frame_state.char_height),
+            (10.0, 23.0),
+            "backward_bridge_connects depends on the standard fixture primary font 10x23 cell geometry"
+        );
+        let display_state = engine.last_frame_display_state.as_ref().unwrap();
+        let default_face = &display_state.faces[&neomacs_display_protocol::types::FaceId::new(0)];
+        let font_id = default_face
+            .default_resolved_font_id
+            .expect("default face must carry its realized font id");
+        let opened = display_state
+            .fonts
+            .get(&font_id)
+            .expect("frame font table must contain the realized default font");
+        assert_eq!(
+            opened.family, "Noto Sans Mono",
+            "default face must resolve through GNU font_find_for_lface to the fixture catalog primary monospace face"
+        );
+    }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while engine.maintain_scroll_coverage(&eval).is_some() {
         assert!(std::time::Instant::now() < deadline);

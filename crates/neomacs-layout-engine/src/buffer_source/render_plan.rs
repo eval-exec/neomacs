@@ -798,12 +798,7 @@ impl BufferSourceDefaultFacePlan {
         let metrics = if measurement_mode.uses_concrete_font_geometry()
             && let Some(service) = font_metrics
         {
-            let metrics = service.font_metrics(
-                &face.font_family,
-                face.font_weight,
-                face.italic,
-                face.font_size,
-            );
+            let metrics = service.font_metrics_for_selection(face.font_selection());
             DisplayRowFallbackMetrics::from_font_metrics(metrics)
         } else {
             fallback_metrics

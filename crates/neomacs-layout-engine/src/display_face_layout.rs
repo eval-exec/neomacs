@@ -65,12 +65,7 @@ pub(crate) fn height_adjusted_face(
     let measured_char_width = match measurement {
         HeightFaceMeasurement::ConcreteFont(service) => Some(
             service
-                .font_metrics(
-                    &resolved.font_family,
-                    resolved.font_weight,
-                    resolved.italic,
-                    resolved.font_size,
-                )
+                .font_metrics_for_selection(resolved.font_selection())
                 .char_width,
         ),
         HeightFaceMeasurement::LogicalCells | HeightFaceMeasurement::DeferredFont => None,

@@ -52,8 +52,22 @@ pub(crate) fn resolved_mock_face(
         resolved.use_default_foreground = face.use_default_foreground;
         resolved.use_default_background = face.use_default_background;
         resolved.font_family = face.font_family.clone();
+        resolved.font_foundry = face.font_foundry.clone();
         resolved.font_weight = face.font_weight;
-        resolved.italic = face.attributes.contains(FaceAttributes::ITALIC);
+        let slant = face
+            .font_slant
+            .and_then(neovm_core::face::FontSlant::from_gnu_numeric)
+            .unwrap_or(if face.attributes.contains(FaceAttributes::ITALIC) {
+                neovm_core::face::FontSlant::Italic
+            } else {
+                neovm_core::face::FontSlant::Normal
+            });
+        resolved.font_slant = slant;
+        resolved.italic = slant.is_italic();
+        resolved.font_width = face
+            .font_width
+            .and_then(neovm_core::face::FontWidth::from_gnu_numeric)
+            .unwrap_or(neovm_core::face::FontWidth::Normal);
         let sizing = crate::font::sizing::FontSizing::native_gui();
         resolved.font_size =
             crate::font::sizing::points_to_layout_pixels(face.font_size, sizing.layout_dpi());

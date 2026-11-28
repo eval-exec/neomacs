@@ -1469,13 +1469,24 @@ impl FontMetricsService {
         requests: &[(&str, char, u16, bool, f32, u32)],
         max_bytes: usize,
     ) -> Result<DetachedFontPolicy, crate::font::resolver::FontPolicyCaptureError> {
-        self.capture_worker_font_policy_for_faces_and_primary(&[], requests, max_bytes)
+        let styled: Vec<_> = requests
+            .iter()
+            .map(|&(family, ch, weight, italic, size, face)| {
+                let slant = if italic {
+                    FontSlant::Italic
+                } else {
+                    FontSlant::Normal
+                };
+                (family, ch, weight, slant, FontWidth::Normal, size, face)
+            })
+            .collect();
+        self.capture_worker_font_policy_for_faces_and_primary(&[], &styled, max_bytes)
     }
 
     pub(crate) fn capture_worker_font_policy_for_faces_and_primary(
         &self,
         face_families: &[&str],
-        requests: &[(&str, char, u16, bool, f32, u32)],
+        requests: &[(&str, char, u16, FontSlant, FontWidth, f32, u32)],
         max_bytes: usize,
     ) -> Result<DetachedFontPolicy, crate::font::resolver::FontPolicyCaptureError> {
         use crate::font::resolver::FontPolicyCaptureError;
@@ -1496,12 +1507,13 @@ impl FontMetricsService {
         let (frame, face_epoch) = self.realized_fontset_context();
         let requests: Vec<_> = requests
             .iter()
-            .map(|&(family, ch, weight, italic, size, face)| {
+            .map(|&(family, ch, weight, slant, width, size, face)| {
                 (
                     family,
                     ch,
                     weight,
-                    italic,
+                    slant,
+                    width,
                     self.selection_size(size),
                     crate::font::fallback_order::FaceFontsetId {
                         frame,
@@ -1968,7 +1980,14 @@ impl FontMetricsService {
         italic: bool,
         font_size: f32,
     ) -> MetricsCacheKey {
-        MetricsCacheKey::new(family, weight, italic, font_size, self.device_scale)
+        MetricsCacheKey::new_at_fontset_generation(
+            family,
+            weight,
+            italic,
+            font_size,
+            self.device_scale,
+            self.font_resolver.active_fontset_generation(),
+        )
     }
 
     fn realized_face_font_cache_key(
@@ -2391,10 +2410,34 @@ impl FontMetricsService {
         if family.starts_with("neomacs-pin-") {
             return None;
         }
+        // Empty family in layout/resolved faces means "unspecified `:family`",
+        // which resolves to `"monospace"` (matching `DisplayRowFace::from_resolved`,
+        // `protocol_face_font_selection`, and `neomacs/src/main.rs`).
+        let family = if family.trim().is_empty() {
+            "monospace"
+        } else {
+            family
+        };
         // Capture the alternative-family policy and its governing generation
         // atomically before computing the cache key (no TOCTOU, and isolated on
         // background worker threads).
         let (policy, generation) = self.font_resolver.capture_face_family_policy(family)?;
+        self.platform_face_match_with_captured_policy(
+            family, foundry, weight, slant, width, font_size, &policy, generation,
+        )
+    }
+
+    fn platform_face_match_with_captured_policy(
+        &mut self,
+        family: &str,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        font_size: f32,
+        policy: &super::policy::CapturedFontFamilyPolicy,
+        generation: u64,
+    ) -> Option<crate::font_backend::PlatformFontMatch> {
         let key = MetricsCacheKey::new_at_fontset_generation(
             family,
             weight,
@@ -2410,7 +2453,7 @@ impl FontMetricsService {
         let matched = self
             .font_resolver
             .resolve_face_policy(
-                &policy,
+                policy,
                 foundry,
                 weight,
                 slant,
@@ -3059,14 +3102,25 @@ impl FontMetricsService {
         width: FontWidth,
         font_size: f32,
     ) -> Option<LayoutFontHandle> {
-        let generation = if family.starts_with("neomacs-pin-") {
-            neovm_core::emacs_core::fontset::fontset_generation()
+        let family = if family.trim().is_empty() {
+            "monospace"
         } else {
-            self.font_resolver
-                .capture_face_family_policy(family)
-                .map(|(_, generation)| generation)
-                .unwrap_or_else(neovm_core::emacs_core::fontset::fontset_generation)
+            family
         };
+        // Capture `(policy, generation)` once and pass it straight into
+        // materialization so `resolved_face_font_cache` and
+        // `primary_match_cache` share the exact same atomic policy snapshot
+        // (no second capture / TOCTOU, and zero live generation reads on
+        // worker threads).
+        let captured = if family.starts_with("neomacs-pin-") {
+            None
+        } else {
+            self.font_resolver.capture_face_family_policy(family)
+        };
+        let generation = captured
+            .as_ref()
+            .map(|(_, generation)| *generation)
+            .unwrap_or_else(|| self.font_resolver.active_fontset_generation());
         let key = MetricsCacheKey::new_at_fontset_generation(
             family,
             weight,
@@ -3079,8 +3133,15 @@ impl FontMetricsService {
         if let Some(cached) = self.resolved_face_font_cache.get(&key) {
             return cached.clone();
         }
-        let materialized =
-            self.materialize_face_font_style(family, foundry, weight, slant, width, font_size);
+        let materialized = self.materialize_face_font_style(
+            family,
+            foundry,
+            weight,
+            slant,
+            width,
+            font_size,
+            captured.as_ref().map(|(policy, _)| (policy, generation)),
+        );
         self.resolved_face_font_cache
             .insert(key, materialized.clone());
         materialized
@@ -3094,12 +3155,17 @@ impl FontMetricsService {
         slant: FontSlant,
         width: FontWidth,
         font_size: f32,
+        captured_policy: Option<(&super::policy::CapturedFontFamilyPolicy, u64)>,
     ) -> Option<LayoutFontHandle> {
         // The platform-selected file/index is the primary face identity.
         // Pass the raw Lisp face family into GNU `font_find_for_lface`
         // (`resolve_face_font`) so `face-font-family-alternatives` and
         // inherited foundry preferences are consulted before fallback.
-        let platform = self.platform_face_match(family, foundry, weight, slant, width, font_size);
+        let platform = captured_policy.and_then(|(policy, generation)| {
+            self.platform_face_match_with_captured_policy(
+                family, foundry, weight, slant, width, font_size, policy, generation,
+            )
+        });
         let fallback_family = platform
             .as_ref()
             .map(|matched| matched.metadata.family.as_str())
@@ -3419,12 +3485,14 @@ impl FontMetricsService {
         selection: RealizedFaceFontSelection<'_>,
     ) -> Option<FontVerticalMetrics> {
         if ch.is_ascii() {
-            let key = self.cache_key(
-                selection.family,
-                selection.weight,
-                selection.italic,
-                selection.font_size,
-            );
+            let key = self
+                .cache_key(
+                    selection.family,
+                    selection.weight,
+                    selection.italic,
+                    selection.font_size,
+                )
+                .with_face_style(selection.foundry, selection.slant, selection.width);
             if let Some(cached) = self.resolved_face_font_cache.get(&key) {
                 return cached
                     .as_ref()
@@ -3828,10 +3896,12 @@ impl FontMetricsService {
         let representative = crate::composition::representative_char_for_cluster(text);
         let materialized = match representative {
             Some(ch) => self.materialized_font_for_realized_face_char(ch, selection),
-            None => self.materialized_font_for_face(
+            None => self.materialized_font_for_face_style(
                 selection.family,
+                selection.foundry,
                 selection.weight,
-                selection.italic,
+                selection.slant,
+                selection.width,
                 selection.font_size,
             ),
         };

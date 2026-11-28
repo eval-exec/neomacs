@@ -1246,14 +1246,9 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         resolved: &ResolvedFace,
     ) -> Option<crate::font::metrics::FontMetrics> {
         if measurement_policy.uses_concrete_font_geometry() {
-            self.font_metrics.as_mut().map(|svc| {
-                svc.font_metrics(
-                    &resolved.font_family,
-                    resolved.font_weight,
-                    resolved.italic,
-                    resolved.font_size,
-                )
-            })
+            self.font_metrics
+                .as_mut()
+                .map(|svc| svc.font_metrics_for_selection(resolved.font_selection()))
         } else {
             None
         }

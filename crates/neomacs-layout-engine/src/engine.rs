@@ -2470,17 +2470,8 @@ impl LayoutEngine {
             use strum::IntoEnumIterator;
 
             let default_face = face_resolver.default_face();
-            let default_selection = crate::font::metrics::RealizedFaceFontSelection::new(
-                &default_face.font_family,
-                default_face.font_weight,
-                default_face.italic,
-                default_face.font_size,
-            )
-            .with_foundry(default_face.font_foundry.as_deref())
-            .with_slant(default_face.font_slant)
-            .with_width(default_face.font_width);
             if service
-                .resolved_font_for_face_selection(default_selection)
+                .resolved_font_for_face_selection(default_face.font_selection())
                 .is_some()
             {
                 // GNU xfaces.c:5950 realizes every basic GUI face after the
@@ -2496,16 +2487,7 @@ impl LayoutEngine {
                     // have already rounded to a different size.
                     let attributes = default.merge(&table.resolve(basic.name()));
                     let face = face_resolver.realize_face(&attributes);
-                    let selection = crate::font::metrics::RealizedFaceFontSelection::new(
-                        &face.font_family,
-                        face.font_weight,
-                        face.italic,
-                        face.font_size,
-                    )
-                    .with_foundry(face.font_foundry.as_deref())
-                    .with_slant(face.font_slant)
-                    .with_width(face.font_width);
-                    let _ = service.resolved_font_for_face_selection(selection);
+                    let _ = service.resolved_font_for_face_selection(face.font_selection());
                 }
             }
         }

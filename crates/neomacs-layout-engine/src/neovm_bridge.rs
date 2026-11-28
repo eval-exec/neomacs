@@ -4754,6 +4754,57 @@ impl PartialEq for ResolvedFace {
 }
 
 impl ResolvedFace {
+    pub(crate) fn effective_font_slant(&self) -> neovm_core::face::FontSlant {
+        if self.italic && !self.font_slant.is_italic() {
+            neovm_core::face::FontSlant::Italic
+        } else {
+            self.font_slant
+        }
+    }
+
+    pub(crate) fn font_selection(&self) -> crate::font::metrics::RealizedFaceFontSelection<'_> {
+        let family = if self.font_family.is_empty() {
+            "monospace"
+        } else {
+            self.font_family.as_ref()
+        };
+        let slant = self.effective_font_slant();
+        crate::font::metrics::RealizedFaceFontSelection::new(
+            family,
+            self.font_weight,
+            slant.is_italic(),
+            self.font_size.max(1.0),
+        )
+        .with_foundry(self.font_foundry.as_deref())
+        .with_slant(slant)
+        .with_width(self.font_width)
+    }
+
+    fn apply_neo_face_font_style(&mut self, face: &NeoFace) {
+        if let Some(family) = face.family_runtime_string_shared() {
+            self.font_family = family;
+        }
+        if let Some(foundry) = face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()))
+            .filter(|value| !value.is_empty())
+        {
+            self.font_foundry = Some(std::sync::Arc::from(foundry));
+        }
+        if let Some(weight) = face.weight {
+            self.font_weight = weight.css_weight();
+        }
+        if let Some(slant) = face.slant {
+            self.font_slant = slant;
+            self.italic = slant.is_italic();
+        }
+        if let Some(width) = face.width {
+            self.font_width = width;
+        }
+    }
+
     fn require_generic_tty_lookup(&mut self) {
         self.canonical_tty_role = None;
         self.tty_space_identity = TtySpaceIdentity::Unknown;
@@ -5787,14 +5838,9 @@ impl FaceResolver {
         } else {
             df.set_frame_default_background(default_bg);
         }
-        df.font_family = neo_default
-            .family_runtime_string_shared()
-            .unwrap_or_else(neomacs_display_protocol::face::empty_face_string);
-        df.font_weight = neo_default
-            .weight
-            .map(FontWeight::css_weight)
-            .unwrap_or(FontWeight::NORMAL.css_weight());
-        df.italic = neo_default.slant.map(|s| s.is_italic()).unwrap_or(false);
+        df.font_family = neomacs_display_protocol::face::empty_face_string();
+        df.font_weight = FontWeight::NORMAL.css_weight();
+        df.apply_neo_face_font_style(&neo_default);
         let (requested_default_size, default_height_tenths) = match &neo_default.height {
             Some(FaceHeight::Absolute(tenths)) if *tenths > 0 => {
                 let px = font_sizing.face_height_to_layout_pixels(*tenths);
@@ -6635,15 +6681,7 @@ impl FaceResolver {
             .realize()
             .install(&mut rf);
 
-        if let Some(family) = face.family_runtime_string_shared() {
-            rf.font_family = family;
-        }
-        if let Some(weight) = face.weight {
-            rf.font_weight = weight.css_weight();
-        }
-        if let Some(slant) = face.slant {
-            rf.italic = slant.is_italic();
-        }
+        rf.apply_neo_face_font_style(face);
         if let Some(height) = &face.height {
             (rf.font_size, rf.font_height_tenths) =
                 self.resolve_face_height(height, rf.font_size, rf.font_height_tenths);
@@ -7838,33 +7876,8 @@ impl FaceResolver {
             .realize()
             .install(&mut rf);
 
-        // Font family
-        if let Some(family) = face.family_runtime_string_shared() {
-            rf.font_family = family;
-        }
-        // Font foundry
-        if let Some(foundry) = face
-            .foundry
-            .as_ref()
-            .and_then(|value| value.as_lisp_string())
-            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()))
-            .filter(|value| !value.is_empty())
-        {
-            rf.font_foundry = Some(std::sync::Arc::from(foundry));
-        }
-        // Font weight
-        if let Some(w) = &face.weight {
-            rf.font_weight = w.css_weight();
-        }
-        // Font slant
-        if let Some(s) = &face.slant {
-            rf.font_slant = *s;
-            rf.italic = s.is_italic();
-        }
-        // Font width
-        if let Some(w) = &face.width {
-            rf.font_width = *w;
-        }
+        // Font style (family, foundry, weight, slant+italic, width)
+        rf.apply_neo_face_font_style(face);
         // Font height
         if let Some(h) = &face.height {
             (rf.font_size, rf.font_height_tenths) = self.resolve_face_height(

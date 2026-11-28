@@ -325,6 +325,9 @@ pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Ve
         .collect();
     if let Ok(mut state) = alternative_font_registry_alist().write() {
         *state = spellings;
+        // Publish the epoch while the registry owner remains exclusively held,
+        // matching `replace_alternative_font_family_alist`.
+        crate::emacs_core::fontset::invalidate_font_selection_policy();
     }
 }
 

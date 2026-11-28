@@ -6014,3 +6014,414 @@ fn non_ascii_fontdb_fallback_records_opened_font_family_not_requested() {
         "materialize_requested_char_font must record the opened fontdb face's real family, not the unresolved requested family"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn face_resolver_preserves_italic_and_oblique_through_display_row_and_realize_face_font() {
+    use neomacs_display_protocol::FaceId;
+
+    let hack_regular = test_font_path(neomacs_test_fonts::hack_regular_3_003().to_path_buf());
+    let hack_italic = test_font_path(neomacs_test_fonts::hack_italic_3_003().to_path_buf());
+
+    struct HackRegularItalicBackend {
+        regular: String,
+        italic: String,
+    }
+
+    impl crate::font_backend::FontBackend for HackRegularItalicBackend {
+        fn kind(&self) -> FontBackendKind {
+            FontBackendKind::Fontconfig
+        }
+
+        fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+            vec![crate::font_backend::FontFamilyName::new("Hack").unwrap()]
+        }
+
+        fn resolve_family(&self, family: &str) -> String {
+            family.to_owned()
+        }
+
+        fn family_prefers_monospace(&self, _family: &str) -> bool {
+            true
+        }
+
+        fn list_candidates(
+            &self,
+            _query: &crate::font_backend::FontCandidateQuery,
+        ) -> Vec<crate::font_backend::FontCandidate> {
+            let make = |path: &str, slant: FontSlant| crate::font_backend::FontCandidate {
+                matched: platform_file_candidate(
+                    ResolvedFontIdentity::from_file(path, 0, None),
+                    crate::font_backend::PlatformFontMetadata {
+                        foundry: Some("SRC".to_owned()),
+                        family: "Hack".to_owned(),
+                        weight: Some(400),
+                        slant,
+                        width: Some(FontWidth::Normal),
+                        spacing: Some(100),
+                        design_metrics: None,
+                        size: crate::font_backend::PlatformFontSize::Scalable,
+                    },
+                ),
+            };
+            vec![
+                make(&self.regular, FontSlant::Normal),
+                make(&self.italic, FontSlant::Italic),
+            ]
+        }
+
+        fn advance_catalog_generation(&mut self) {}
+
+        fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+            crate::font::catalog::FontCatalogChange::Unchanged
+        }
+    }
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(HackRegularItalicBackend {
+            regular: hack_regular.clone(),
+            italic: hack_italic.clone(),
+        }));
+    svc.font_system
+        .db_mut()
+        .load_font_file(&hack_regular)
+        .unwrap();
+    svc.font_system
+        .db_mut()
+        .load_font_file(&hack_italic)
+        .unwrap();
+
+    let mut table = neovm_core::face::FaceTable::new();
+    let mut default_face = neovm_core::face::Face::new("default");
+    default_face.family = Some(neovm_core::emacs_core::Value::string("Hack"));
+    default_face.foundry = Some(neovm_core::emacs_core::Value::string("SRC"));
+    table.define("default", default_face);
+
+    let mut italic_face = neovm_core::face::Face::new("italic");
+    italic_face.slant = Some(FontSlant::Italic);
+    table.define("italic", italic_face);
+
+    let resolver = crate::neovm_bridge::FaceResolver::new(
+        &table,
+        0x00ff_ffff,
+        0x0000_0000,
+        14.0,
+        Some("x".to_string()),
+    );
+
+    // (a) Buffer-text named italic face via `apply_specified_face_over`.
+    let buffer_italic = resolver
+        .resolve_face_value_over(
+            resolver.default_face(),
+            &neovm_core::emacs_core::Value::symbol("italic"),
+        )
+        .expect("italic symbol must resolve over default");
+    let buffer_row = crate::display_row::face_state::DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &buffer_italic,
+    );
+    assert!(buffer_row.italic);
+    assert_eq!(buffer_row.font_slant, FontSlant::Italic);
+    assert!(buffer_row.font_selection().italic);
+    assert_eq!(buffer_row.font_selection().slant, FontSlant::Italic);
+    let mut buffer_protocol = buffer_row.render_face();
+    assert!(protocol_face_font_selection(&svc, buffer_protocol.id, &buffer_protocol).italic);
+    assert_eq!(
+        protocol_face_font_selection(&svc, buffer_protocol.id, &buffer_protocol).slant,
+        FontSlant::Italic
+    );
+    let realized_buffer = realize_face_font(&mut buffer_protocol, &mut svc)
+        .expect("realize_face_font must open italic Hack");
+    assert_eq!(
+        realized_buffer.identity.file_path.as_deref(),
+        Some(hack_italic.as_str()),
+        "buffer italic face must open Hack-Italic, not Hack-Regular"
+    );
+
+    // (b) Overlay oblique plist via `apply_specified_face_over`.
+    let oblique_plist = neovm_core::emacs_core::Value::list(vec![
+        neovm_core::emacs_core::Value::keyword(":slant"),
+        neovm_core::emacs_core::Value::symbol("oblique"),
+    ]);
+    let overlay_oblique = resolver
+        .resolve_face_value_over(resolver.default_face(), &oblique_plist)
+        .expect("(:slant oblique) plist must resolve over default");
+    let overlay_row = crate::display_row::face_state::DisplayRowFace::from_resolved(
+        FaceId::new(2),
+        &overlay_oblique,
+    );
+    assert!(overlay_row.italic);
+    assert_eq!(overlay_row.font_slant, FontSlant::Oblique);
+    assert!(overlay_row.font_selection().italic);
+    assert_eq!(overlay_row.font_selection().slant, FontSlant::Oblique);
+    let mut overlay_protocol = overlay_row.render_face();
+    assert_eq!(
+        protocol_face_font_selection(&svc, overlay_protocol.id, &overlay_protocol).slant,
+        FontSlant::Oblique
+    );
+    let realized_overlay = realize_face_font(&mut overlay_protocol, &mut svc)
+        .expect("realize_face_font must open slanted Hack for oblique overlay");
+    assert_eq!(
+        realized_overlay.identity.file_path.as_deref(),
+        Some(hack_italic.as_str()),
+        "oblique overlay face must open Hack-Italic, not Hack-Regular"
+    );
+
+    // (b2) Remapped face via `face-remapping-alist` (`default` -> `italic`).
+    let remap_buf_id = eval
+        .buffer_manager_mut()
+        .create_buffer("*italic-remap-672*");
+    let remap_buf = eval
+        .buffer_manager_mut()
+        .get_mut(remap_buf_id)
+        .expect("created remap buffer");
+    remap_buf.set_buffer_local(
+        "face-remapping-alist",
+        neovm_core::emacs_core::Value::list(vec![neovm_core::emacs_core::Value::list(vec![
+            neovm_core::emacs_core::Value::symbol("default"),
+            neovm_core::emacs_core::Value::symbol("italic"),
+            neovm_core::emacs_core::Value::symbol("default"),
+        ])]),
+    );
+    let remapping = crate::neovm_bridge::BufferFaceRemapping::capture(remap_buf);
+    let remapped = resolver.resolve_remapped_default_face(remapping);
+    let remapped_row =
+        crate::display_row::face_state::DisplayRowFace::from_resolved(FaceId::new(3), &remapped);
+    assert!(remapped_row.italic);
+    assert_eq!(remapped_row.font_slant, FontSlant::Italic);
+    let mut remapped_protocol = remapped_row.render_face();
+    let realized_remapped = realize_face_font(&mut remapped_protocol, &mut svc)
+        .expect("realize_face_font must open italic Hack for remapped face");
+    assert_eq!(
+        realized_remapped.identity.file_path.as_deref(),
+        Some(hack_italic.as_str()),
+        "remapped italic face must open Hack-Italic, not Hack-Regular"
+    );
+
+    // (c) Italic `default` face via `FaceResolver::new_with_font_sizing`.
+    let mut italic_default_table = neovm_core::face::FaceTable::new();
+    let mut italic_default = neovm_core::face::Face::new("default");
+    italic_default.family = Some(neovm_core::emacs_core::Value::string("Hack"));
+    italic_default.slant = Some(FontSlant::Italic);
+    italic_default_table.define("default", italic_default);
+    let italic_default_resolver = crate::neovm_bridge::FaceResolver::new(
+        &italic_default_table,
+        0x00ff_ffff,
+        0x0000_0000,
+        14.0,
+        Some("x".to_string()),
+    );
+    let default_row = crate::display_row::face_state::DisplayRowFace::from_resolved(
+        FaceId::new(0),
+        italic_default_resolver.default_face(),
+    );
+    assert!(default_row.italic);
+    assert_eq!(default_row.font_slant, FontSlant::Italic);
+    assert!(default_row.font_selection().italic);
+    assert_eq!(default_row.font_selection().slant, FontSlant::Italic);
+    let mut default_protocol = default_row.render_face();
+    let realized_default = realize_face_font(&mut default_protocol, &mut svc)
+        .expect("realize_face_font must open italic Hack for italic default face");
+    assert_eq!(
+        realized_default.identity.file_path.as_deref(),
+        Some(hack_italic.as_str()),
+        "italic default face must open Hack-Italic, not Hack-Regular"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn face_resolver_inherits_default_foundry_through_display_row_and_realize_face_font() {
+    use neomacs_display_protocol::FaceId;
+
+    let hack = test_font_path(neomacs_test_fonts::hack_regular_3_003().to_path_buf());
+    let dejavu = test_font_path(
+        neomacs_test_fonts::dejavu_2_37()
+            .mono_regular()
+            .to_path_buf(),
+    );
+
+    struct TwoFontFoundryBackend {
+        hack: String,
+        dejavu: String,
+    }
+
+    impl crate::font_backend::FontBackend for TwoFontFoundryBackend {
+        fn kind(&self) -> FontBackendKind {
+            FontBackendKind::Fontconfig
+        }
+
+        fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+            vec![
+                crate::font_backend::FontFamilyName::new("DejaVu Sans Mono").unwrap(),
+                crate::font_backend::FontFamilyName::new("Hack").unwrap(),
+            ]
+        }
+
+        fn resolve_family(&self, family: &str) -> String {
+            family.to_owned()
+        }
+
+        fn family_prefers_monospace(&self, _family: &str) -> bool {
+            true
+        }
+
+        fn list_candidates(
+            &self,
+            query: &crate::font_backend::FontCandidateQuery,
+        ) -> Vec<crate::font_backend::FontCandidate> {
+            let make =
+                |family: &str, foundry: &str, path: &str| crate::font_backend::FontCandidate {
+                    matched: platform_file_candidate(
+                        ResolvedFontIdentity::from_file(path, 0, None),
+                        crate::font_backend::PlatformFontMetadata {
+                            foundry: Some(foundry.to_owned()),
+                            family: family.to_owned(),
+                            weight: Some(400),
+                            slant: FontSlant::Normal,
+                            width: Some(FontWidth::Normal),
+                            spacing: Some(100),
+                            design_metrics: None,
+                            size: crate::font_backend::PlatformFontSize::Scalable,
+                        },
+                    ),
+                };
+            let dejavu_candidate = make("DejaVu Sans Mono", "PfEd", &self.dejavu);
+            let hack_candidate = make("Hack", "SRC", &self.hack);
+            match query.scope.queried_family() {
+                Some(family) if family.eq_ignore_ascii_case("Hack") => vec![hack_candidate],
+                Some(family) if family.eq_ignore_ascii_case("DejaVu Sans Mono") => {
+                    vec![dejavu_candidate]
+                }
+                Some(_) => Vec::new(),
+                // DejaVu Sans Mono (PfEd) comes BEFORE Hack (SRC) so only
+                // inheriting `:foundry "SRC"` from `default` picks Hack.
+                None => vec![dejavu_candidate, hack_candidate],
+            }
+        }
+
+        fn advance_catalog_generation(&mut self) {}
+
+        fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+            crate::font::catalog::FontCatalogChange::Unchanged
+        }
+    }
+
+    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(TwoFontFoundryBackend {
+            hack: hack.clone(),
+            dejavu: dejavu.clone(),
+        }));
+    svc.font_system.db_mut().load_font_file(&hack).unwrap();
+    svc.font_system.db_mut().load_font_file(&dejavu).unwrap();
+
+    let mut table = neovm_core::face::FaceTable::new();
+    let mut default_face = neovm_core::face::Face::new("default");
+    default_face.family = Some(neovm_core::emacs_core::Value::string("Hack"));
+    default_face.foundry = Some(neovm_core::emacs_core::Value::string("SRC"));
+    table.define("default", default_face);
+
+    let mut missing_face = neovm_core::face::Face::new("neo-672-missing-face");
+    missing_face.family = Some(neovm_core::emacs_core::Value::string("NoSuchFamilyFor672"));
+    table.define("neo-672-missing-face", missing_face);
+
+    let resolver = crate::neovm_bridge::FaceResolver::new(
+        &table,
+        0x00ff_ffff,
+        0x0000_0000,
+        14.0,
+        Some("x".to_string()),
+    );
+    assert_eq!(
+        resolver.default_face().font_foundry.as_deref(),
+        Some("SRC"),
+        "FaceResolver::new_with_font_sizing must preserve default face :foundry"
+    );
+
+    // Path 1: buffer text-property resolution (`apply_specified_face_over`).
+    let resolved_overlay = resolver
+        .resolve_face_value_over(
+            resolver.default_face(),
+            &neovm_core::emacs_core::Value::symbol("neo-672-missing-face"),
+        )
+        .expect("neo-672-missing-face must resolve over default");
+    assert_eq!(resolved_overlay.font_foundry.as_deref(), Some("SRC"));
+
+    let row_face = crate::display_row::face_state::DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &resolved_overlay,
+    );
+    assert_eq!(row_face.font_foundry.as_deref(), Some("SRC"));
+    assert_eq!(row_face.font_selection().foundry, Some("SRC"));
+
+    let mut protocol_face = row_face.render_face();
+    assert_eq!(protocol_face.font_foundry.as_deref(), Some("SRC"));
+    let realized = realize_face_font(&mut protocol_face, &mut svc)
+        .expect("realize_face_font must open Hack via inherited SRC foundry");
+    assert_eq!(
+        realized.family, "Hack",
+        "on-screen layout must open Hack, not DejaVu Sans Mono"
+    );
+    assert_eq!(realized.identity.file_path.as_deref(), Some(hack.as_str()));
+
+    // Path 2: explicit `:foundry "SRC"` in an anonymous plist over a foundry-less default.
+    let mut plain_table = neovm_core::face::FaceTable::new();
+    let mut plain_default = neovm_core::face::Face::new("default");
+    plain_default.family = Some(neovm_core::emacs_core::Value::string("DejaVu Sans Mono"));
+    plain_table.define("default", plain_default);
+    let plain_resolver = crate::neovm_bridge::FaceResolver::new(
+        &plain_table,
+        0x00ff_ffff,
+        0x0000_0000,
+        14.0,
+        Some("x".to_string()),
+    );
+    let explicit_foundry_plist = neovm_core::emacs_core::Value::list(vec![
+        neovm_core::emacs_core::Value::keyword(":family"),
+        neovm_core::emacs_core::Value::string("NoSuchFamilyFor672"),
+        neovm_core::emacs_core::Value::keyword(":foundry"),
+        neovm_core::emacs_core::Value::string("SRC"),
+    ]);
+    let resolved_explicit = plain_resolver
+        .resolve_face_value_over(plain_resolver.default_face(), &explicit_foundry_plist)
+        .expect("explicit :foundry plist must resolve");
+    assert_eq!(
+        resolved_explicit.font_foundry.as_deref(),
+        Some("SRC"),
+        "apply_specified_face_over must copy explicit :foundry"
+    );
+
+    // Path 3: `vertical_metrics_for_realized_face_char` ASCII fast path must include
+    // `.with_face_style(...)` so a cached `foundry: None` entry (DejaVu Sans Mono)
+    // does not shadow `foundry: Some("SRC")` (Hack).
+    let no_foundry_sel = RealizedFaceFontSelection::new("NoSuchFamilyFor672", 400, false, 14.0);
+    let no_foundry_metrics = svc
+        .vertical_metrics_for_realized_face_char('M', no_foundry_sel)
+        .expect("unconstrained fallback vertical metrics");
+    let hack_metrics = svc
+        .vertical_metrics_for_realized_face_char(
+            'M',
+            RealizedFaceFontSelection::new("Hack", 400, false, 14.0).with_foundry(Some("SRC")),
+        )
+        .expect("Hack vertical metrics");
+    let src_missing_metrics = svc
+        .vertical_metrics_for_realized_face_char('M', row_face.font_selection())
+        .expect("inherited-foundry fallback vertical metrics");
+    assert_eq!(
+        (
+            src_missing_metrics.ascent,
+            src_missing_metrics.descent,
+            src_missing_metrics.line_height,
+        ),
+        (
+            hack_metrics.ascent,
+            hack_metrics.descent,
+            hack_metrics.line_height,
+        ),
+        "vertical_metrics_for_realized_face_char must return Hack metrics, not cached foundry:None DejaVu metrics ({no_foundry_metrics:?})"
+    );
+}

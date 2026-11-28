@@ -94,6 +94,35 @@ fn same_face_realization(left: &Face, right: &Face) -> bool {
         font_slant,
         font_width,
     } = left;
+    let left_slant = font_slant
+        .and_then(neovm_core::face::FontSlant::from_gnu_numeric)
+        .unwrap_or(
+            if attributes.contains(neomacs_display_protocol::face::FaceAttributes::ITALIC) {
+                neovm_core::face::FontSlant::Italic
+            } else {
+                neovm_core::face::FontSlant::Normal
+            },
+        );
+    let right_slant = right
+        .font_slant
+        .and_then(neovm_core::face::FontSlant::from_gnu_numeric)
+        .unwrap_or(
+            if right
+                .attributes
+                .contains(neomacs_display_protocol::face::FaceAttributes::ITALIC)
+            {
+                neovm_core::face::FontSlant::Italic
+            } else {
+                neovm_core::face::FontSlant::Normal
+            },
+        );
+    let left_width = font_width
+        .and_then(neovm_core::face::FontWidth::from_gnu_numeric)
+        .unwrap_or(neovm_core::face::FontWidth::Normal);
+    let right_width = right
+        .font_width
+        .and_then(neovm_core::face::FontWidth::from_gnu_numeric)
+        .unwrap_or(neovm_core::face::FontWidth::Normal);
     tty_space_identity == &right.tty_space_identity
         && foreground == &right.foreground
         && background == &right.background
@@ -108,8 +137,8 @@ fn same_face_realization(left: &Face, right: &Face) -> bool {
         && box_color == &right.box_color
         && font_family == &right.font_family
         && font_foundry == &right.font_foundry
-        && font_slant == &right.font_slant
-        && font_width == &right.font_width
+        && left_slant == right_slant
+        && left_width == right_width
         && font_size == &right.font_size
         && font_weight == &right.font_weight
         && attributes == &right.attributes

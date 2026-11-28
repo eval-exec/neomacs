@@ -1554,8 +1554,11 @@ pub(crate) fn same_resolved_face(lhs: &ResolvedFace, rhs: &ResolvedFace) -> bool
         && lhs.fg == rhs.fg
         && lhs.bg == rhs.bg
         && lhs.font_family == rhs.font_family
+        && lhs.font_foundry == rhs.font_foundry
         && lhs.font_weight == rhs.font_weight
         && lhs.italic == rhs.italic
+        && lhs.effective_font_slant() == rhs.effective_font_slant()
+        && lhs.font_width == rhs.font_width
         && (lhs.font_size - rhs.font_size).abs() <= f32::EPSILON
         && lhs.underline_style == rhs.underline_style
         && lhs.underline_color == rhs.underline_color

@@ -149,7 +149,18 @@ impl FrozenCharacterPolicies {
         )],
         max_bytes: usize,
     ) -> Result<Self, FontPolicyCaptureError> {
-        Self::capture_for_fontsets_and_primary_families(&[], requests, max_bytes)
+        let styled: Vec<_> = requests
+            .iter()
+            .map(|&(family, ch, weight, italic, size, fontset)| {
+                let slant = if italic {
+                    FontSlant::Italic
+                } else {
+                    FontSlant::Normal
+                };
+                (family, ch, weight, slant, FontWidth::Normal, size, fontset)
+            })
+            .collect();
+        Self::capture_for_fontsets_and_primary_families(&[], &styled, max_bytes)
     }
 
     pub(crate) fn capture_for_fontsets_and_primary_families(
@@ -158,7 +169,8 @@ impl FrozenCharacterPolicies {
             &str,
             char,
             u16,
-            bool,
+            FontSlant,
+            FontWidth,
             FontSelectionSize,
             crate::font::fallback_order::FaceFontsetId,
         )],
@@ -194,7 +206,7 @@ impl FrozenCharacterPolicies {
                 .primary_families
                 .insert(family.to_owned(), inherited);
         }
-        for &(family, ch, weight, italic, size, fontset) in requests {
+        for &(family, ch, weight, slant, width, size, fontset) in requests {
             if ch.is_ascii() {
                 continue;
             }
@@ -206,18 +218,13 @@ impl FrozenCharacterPolicies {
             {
                 return Err(FontPolicyCaptureError::Budget);
             }
-            let slant = if italic {
-                FontSlant::Italic
-            } else {
-                FontSlant::Normal
-            };
             let key = CharCacheKey {
                 fontset,
                 family: family.to_owned(),
                 ch,
                 weight,
                 slant: slant.gnu_numeric(),
-                width: FontWidth::Normal.gnu_numeric(),
+                width: width.gnu_numeric(),
                 fontset_generation: generation.get(),
                 size,
             };

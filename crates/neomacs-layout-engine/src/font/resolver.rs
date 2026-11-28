@@ -1047,6 +1047,14 @@ impl FontResolver {
     /// `FrozenCharacterPolicies::primary_families` without touching live
     /// `ALTERNATIVE_FONT_FAMILY_ALIST`. On the evaluator thread, reads both
     /// the family list and generation atomically under the alist read lock.
+    pub(crate) fn active_fontset_generation(&self) -> u64 {
+        if let Some(worker) = &self.worker_policy {
+            worker.policies.generation.get()
+        } else {
+            neovm_core::emacs_core::fontset::fontset_generation()
+        }
+    }
+
     pub(crate) fn capture_face_family_policy(
         &self,
         family: &str,
@@ -1096,11 +1104,16 @@ impl FontResolver {
     ) -> Option<PlatformFontMatch> {
         for family in families.search_order(|family| self.backend.resolve_family(family)) {
             let (scope, prefer_monospace, queried_family) = match &family {
-                FontFamilyCandidate::Family(family) => (
-                    FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?),
-                    self.family_prefers_monospace(family.as_ref()),
-                    Some(family.as_ref()),
-                ),
+                FontFamilyCandidate::Family(family) => {
+                    let Some(family_name) = FontFamilyName::new(family.as_ref()) else {
+                        continue;
+                    };
+                    (
+                        FontCandidateScope::Family(family_name),
+                        self.family_prefers_monospace(family.as_ref()),
+                        Some(family.as_ref()),
+                    )
+                }
                 // This is GNU's family=nil enumeration, not a character's
                 // native fallback cascade or a generic monospace request.
                 FontFamilyCandidate::NativeFallback => (FontCandidateScope::All, false, None),

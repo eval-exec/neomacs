@@ -300,11 +300,14 @@ impl FontMeasurementSnapshot {
                     .chain(source)
                     .filter(|ch| !ch.is_ascii())
                 {
+                    let slant = face.effective_font_slant();
                     let request = (
                         face.font_family.as_ref(),
+                        face.font_foundry.as_deref(),
                         ch,
                         face.font_weight,
-                        face.italic,
+                        slant,
+                        face.font_width,
                         face.font_size.max(1.0),
                         face.face_id.get(),
                     );
@@ -323,16 +326,31 @@ impl FontMeasurementSnapshot {
         // attempt is later discarded. Worker-local caches must not publish
         // that mutable connection input from a background measurement.
         let (frame, face_epoch) = fonts.realized_fontset_context();
-        for &(family, ch, weight, italic, size, face) in &requests {
-            let selection =
-                crate::font::metrics::RealizedFaceFontSelection::new(family, weight, italic, size)
-                    .with_fontset(frame, face, face_epoch);
+        for &(family, foundry, ch, weight, slant, width, size, face) in &requests {
+            let selection = crate::font::metrics::RealizedFaceFontSelection::new(
+                family,
+                weight,
+                slant.is_italic(),
+                size,
+            )
+            .with_foundry(foundry)
+            .with_slant(slant)
+            .with_width(width)
+            .with_fontset(frame, face, face_epoch);
             let _ = fonts.resolved_font_for_realized_face_char(ch, selection);
         }
+        let policy_requests: Vec<_> = requests
+            .iter()
+            .map(
+                |&(family, _foundry, ch, weight, slant, width, size, face)| {
+                    (family, ch, weight, slant, width, size, face)
+                },
+            )
+            .collect();
         let face_families: Vec<&str> = faces.iter().map(|face| face.font_family.as_ref()).collect();
         let policy = fonts.capture_worker_font_policy_for_faces_and_primary(
             &face_families,
-            &requests,
+            &policy_requests,
             budget.capture_bytes.saturating_sub(bytes),
         )?;
         bytes += policy.bytes();
@@ -409,13 +427,36 @@ impl FontMeasurementSnapshot {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct WorkerFaceCacheKey {
+    family: neomacs_display_protocol::face::FaceString,
+    foundry: Option<neomacs_display_protocol::face::FaceString>,
+    weight: u16,
+    slant: neovm_core::face::FontSlant,
+    width: neovm_core::face::FontWidth,
+    size_bits: u32,
+}
+
+impl WorkerFaceCacheKey {
+    fn of(face: &DisplayRowFace) -> Self {
+        Self {
+            family: face.font_family.clone(),
+            foundry: face.font_foundry.clone(),
+            weight: face.font_weight,
+            slant: face.effective_font_slant(),
+            width: face.font_width,
+            size_bits: face.font_size.to_bits(),
+        }
+    }
+}
+
 /// The thread creates and destroys its own fontdb/native handles. A revision
 /// change or a bounded working-set overflow rebuilds this cache on the worker.
 #[derive(Default)]
 pub(crate) struct WorkerFontMeasurements {
     service: Option<FontMetricsService>,
     revision: Option<MeasurementRevision>,
-    faces: Vec<(neomacs_display_protocol::face::FaceString, u16, bool, u32)>,
+    faces: Vec<WorkerFaceCacheKey>,
     #[cfg(test)]
     cache_rebuilds: usize,
 }
@@ -444,19 +485,10 @@ impl WorkerFontMeasurements {
         if cancelled() || faces.len() != snapshot.receipts.len() {
             return Err(RowProgramError::Cancelled);
         }
-        let mut new_faces: rustc_hash::FxHashSet<_> = faces
-            .iter()
-            .map(|face| {
-                (
-                    face.font_family.as_ref(),
-                    face.font_weight,
-                    face.italic,
-                    face.font_size.to_bits(),
-                )
-            })
-            .collect();
-        for (family, weight, italic, size) in &self.faces {
-            new_faces.remove(&(family.as_ref(), *weight, *italic, *size));
+        let mut new_faces: rustc_hash::FxHashSet<_> =
+            faces.iter().map(WorkerFaceCacheKey::of).collect();
+        for cached in &self.faces {
+            new_faces.remove(cached);
         }
         #[cfg(test)]
         let catalog_changed = self
@@ -526,12 +558,7 @@ impl WorkerFontMeasurements {
             if &actual != expected {
                 return Err(RowProgramError::Cancelled);
             }
-            let key = (
-                face.font_family.clone(),
-                face.font_weight,
-                face.italic,
-                face.font_size.to_bits(),
-            );
+            let key = WorkerFaceCacheKey::of(face);
             if !self.faces.contains(&key) {
                 self.faces.push(key);
             }
