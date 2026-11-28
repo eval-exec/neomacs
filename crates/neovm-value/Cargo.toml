@@ -96,3 +96,6 @@ test-thread-fallback-heap = ["test-support"]
 [lints.rust]
 # Split-wave class guard (LEAD 11:5xZ): deny accidental self-recursion.
 unconditional_recursion = "deny"
+# trybuild sets `--cfg trybuild` for the heap_capability_ui contracts, which
+# mount gc source files by `#[path]` (#859 item 1).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(trybuild)"] }

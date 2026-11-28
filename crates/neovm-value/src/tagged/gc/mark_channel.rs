@@ -154,14 +154,17 @@ impl MarkExitSlot {
     /// Test-only: clear the installed receiver without clearing the active
     /// side-table (for `MissingCompletion` failure fixtures).
     ///
-    /// Not gated on `#[cfg(test)]` because `tagged/gc/tests/` fixtures are also
-    /// compiled under `feature = "test-support"`, and trybuild mounts this file
-    /// directly via `#[path]` where `test-support` is not declared. Requiring
-    /// `unsafe` prevents safe code in `tagged::gc` from invoking it.
+    /// Absent from production builds (#859 item 1). Compiled for the crate's
+    /// tests, for `feature = "test-support"` (whose `tagged/gc/tests/`
+    /// fixtures call it), and under `cfg(trybuild)`, which trybuild sets for
+    /// the `heap_capability_ui` contract that mounts this file via `#[path]`
+    /// to prove the call needs `unsafe` (E0133). Requiring `unsafe` still
+    /// keeps safe code in those builds from invoking it.
     ///
     /// # Safety
     /// No real concurrent marker may be using this slot (serial synthetic
     /// fixture only).
+    #[cfg(any(test, feature = "test-support", trybuild))]
     #[doc(hidden)]
     pub(super) unsafe fn clear_for_test(&mut self) {
         self.0 = None;
@@ -170,10 +173,12 @@ impl MarkExitSlot {
     /// Test-only: tear down an inert sentinel receiver AND remove `heap` from
     /// the active side-table (when no real worker ever ran).
     ///
-    /// Same `#[doc(hidden)]` + `unsafe fn` rationale as [`Self::clear_for_test`].
+    /// Same gating, `#[doc(hidden)]` and `unsafe fn` rationale as
+    /// [`Self::clear_for_test`].
     ///
     /// # Safety
     /// No real concurrent marker may have been launched on `heap`.
+    #[cfg(any(test, feature = "test-support", trybuild))]
     #[doc(hidden)]
     pub(super) unsafe fn clear_sentinel_for_test(&mut self, heap: super::HeapIdentity) {
         self.0 = None;

@@ -1,7 +1,7 @@
 //! value-gc C2 regression guard (G1): `MarkExitSlot` and `ConcurrentMarkFlag`
 //! seal `TaggedHeap::{gc_exited, concurrent_mark_running}` with private inner
 //! fields so sibling modules in `tagged::gc` cannot directly assign them.
-
+#![allow(unexpected_cfgs)] // mark_channel.rs gates its test helpers on cfg(trybuild) (#859)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct HeapIdentity(u64);
 #[derive(Clone, Copy, Debug)]

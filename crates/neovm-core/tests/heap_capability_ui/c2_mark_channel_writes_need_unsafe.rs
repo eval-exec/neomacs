@@ -3,7 +3,7 @@
 //! `complete_for_heap`, and `retire_heap` require `unsafe` so safe code in
 //! `tagged::gc` cannot install foreign completion channels, toggle the
 //! concurrent-mark flag, or clear the active-mark side-table.
-
+#![allow(unexpected_cfgs)] // mark_channel.rs gates its test helpers on cfg(trybuild) (#859)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct HeapIdentity(u64);
 #[derive(Clone, Copy, Debug)]
