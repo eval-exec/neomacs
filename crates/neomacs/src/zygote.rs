@@ -612,13 +612,12 @@ mod unix_impl {
 
         // The zygote parent already ran the pure pre-fork half with
         // `no_site_lisp = true` and bootstrapped the 80x24 TTY frame/buffers.
-        // Finish only the per-child OS environment, identity, cwd,
-        // `post_image_init`, and `ProcessWaitBackend` activation here.
-        let recompute_load_path = !child_startup.no_site_lisp;
+        // Finish the per-child activation here: this child's runtime root
+        // (load-path and the directory variables), OS environment, identity,
+        // cwd, `post_image_init`, and `ProcessWaitBackend`.
         if let Err(err) = neovm_core::emacs_core::load::finish_forked_runtime_evaluator(
             &mut evaluator,
             RuntimeImageRole::Final,
-            recompute_load_path,
         ) {
             eprintln!(
                 "neomacs zygote: failed to finish final image activation: {}",

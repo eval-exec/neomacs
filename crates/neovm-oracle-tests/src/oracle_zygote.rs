@@ -1123,6 +1123,52 @@ mod unix_impl {
         }
 
         #[test]
+        fn zygote_child_uses_its_own_runtime_root_for_load_path_and_directories() {
+            // The zygote parent sets the runtime-root-dependent variables
+            // (`load-path`, `data-directory`, `doc-directory`,
+            // `source-directory`, `installation-directory`) before `fork()`.
+            // A request that names a different valid `NEOMACS_RUNTIME_ROOT` must
+            // get that root's values, as a cold start of the same request does,
+            // not the parent's.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-root-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let parent_work = dir.path().join("parent-dir");
+            let cwd = dir.path().join("child-cwd");
+            for d in [&parent_work, &cwd] {
+                fs::create_dir_all(d).unwrap();
+            }
+            // A second valid runtime root: `lisp/` and `etc/` of the real one.
+            let real_root = crate::common::oracle_sandbox::project_root();
+            let other_root = dir.path().join("other-root");
+            fs::create_dir_all(&other_root).unwrap();
+            for sub in ["lisp", "etc"] {
+                std::os::unix::fs::symlink(real_root.join(sub), other_root.join(sub)).unwrap();
+            }
+            let other = other_root.to_str().unwrap();
+            let form = r#"(princ (format "%S"
+                (list data-directory doc-directory source-directory installation-directory
+                      (let ((hit nil))
+                        (dolist (d load-path) (when (string-prefix-p (getenv "NEOVM_ZYGOTE_PROBE_ROOT") d) (setq hit t)))
+                        hit))))"#;
+            let env = [
+                ("NEOMACS_RUNTIME_ROOT", other),
+                ("NEOVM_ZYGOTE_PROBE_ROOT", other),
+            ];
+
+            let mut server = spawn_private_zygote(&program, &sock, &parent_work);
+            let forked =
+                run_direct_on_socket(&sock, &program, &cwd, dir.path(), "root", &env, form);
+            let _ = server.kill();
+            let _ = server.wait();
+            assert!(forked.status.success(), "zygote child failed: {forked:?}");
+            let out = String::from_utf8_lossy(&forked.stdout);
+            let expected =
+                format!("(\"{other}/etc/\" \"{other}/etc/\" \"{other}/\" \"{other}/\" t)");
+            assert_eq!(out, expected, "child kept the zygote parent's runtime root");
+        }
+
+        #[test]
         fn zygote_child_buffer_list_order_matches_cold_start() {
             // The zygote parent runs `bootstrap_buffers` before `fork()`, so
             // each child refreshes `default-directory` on startup buffers that
