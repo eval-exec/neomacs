@@ -66,15 +66,19 @@ impl Control {
     /// `main_excluded` and running QD2 deadlock detection so surviving blocked
     /// Baton threads wake cleanly and an already-parked carrier slot never
     /// wedges — HIGH-2).
-    fn finish_era(&self, mut baton: TurnRight) {
+    pub(super) fn finish_era(&self, mut baton: TurnRight) {
         const DEADLOCK_POLL: std::time::Duration = std::time::Duration::from_millis(5);
         loop {
             enum EraFinishStep {
                 CaseIi {
+                    baton: TurnRight,
                     requester: super::GroupRequestSender,
                     port: Option<super::GroupPort>,
                 },
-                Dispatch(NextOwner),
+                Dispatch {
+                    baton: TurnRight,
+                    next: NextOwner,
+                },
                 EndToIdle,
             }
             let step = {
@@ -90,26 +94,42 @@ impl Control {
                         };
                         let port = era.port.take();
                         state.set_era_turn(GroupTurn::Requested);
-                        EraFinishStep::CaseIi { requester, port }
+                        EraFinishStep::CaseIi {
+                            baton,
+                            requester,
+                            port,
+                        }
                     } else {
-                        state.set_era_turn(GroupTurn::Idle);
+                        Self::release_group_turn_to_idle(&mut state, baton);
                         EraFinishStep::EndToIdle
                     }
                 } else if let Some(turn) = Self::pick_service(&mut state) {
-                    EraFinishStep::Dispatch(NextOwner::Native(turn))
+                    EraFinishStep::Dispatch {
+                        baton,
+                        next: NextOwner::Native(turn),
+                    }
                 } else {
                     match Self::pick(&mut state) {
-                        Some((key, None)) => EraFinishStep::Dispatch(NextOwner::Resume(key)),
+                        Some((key, None)) => EraFinishStep::Dispatch {
+                            baton,
+                            next: NextOwner::Resume(key),
+                        },
                         Some((_, Some(_))) | None => {
-                            state.set_era_turn(GroupTurn::Idle);
+                            Self::release_group_turn_to_idle(&mut state, baton);
                             EraFinishStep::EndToIdle
                         }
                     }
                 }
             };
+            #[cfg(test)]
+            self.observe_finish_era_step_for_test();
             match step {
-                EraFinishStep::CaseIi { requester, port } => {
-                    Self::give_back_era_turn(baton);
+                EraFinishStep::CaseIi {
+                    baton: returning,
+                    requester,
+                    port,
+                } => {
+                    Self::give_back_era_turn(returning);
                     if requester.request_tail().is_err() {
                         return;
                     }
@@ -122,15 +142,15 @@ impl Control {
                     };
                     continue;
                 }
-                EraFinishStep::Dispatch(next) => {
+                EraFinishStep::Dispatch { baton, next } => {
                     let (target, wake) = Self::wake_for(next, baton);
                     self.send_wake(target, wake);
                     return;
                 }
                 EraFinishStep::EndToIdle => {
-                    // Case (i): no eligible Baton thread right now; end the
-                    // interval before waiting.
-                    Self::give_back_era_turn(baton);
+                    // Case (i): `release_group_turn_to_idle` already sent
+                    // `WorldReturn` before storing `GroupTurn::Idle` under
+                    // `Control.state`.
                 }
             }
 

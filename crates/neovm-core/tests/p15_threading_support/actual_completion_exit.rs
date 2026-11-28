@@ -210,6 +210,13 @@ impl Control {
         unreachable!("compile-only era turn return")
     }
 
+    fn release_group_turn_to_idle(_: &mut SchedulerState, _: TurnRight) {
+        unreachable!("compile-only era turn idle release")
+    }
+
+    #[cfg(test)]
+    fn observe_finish_era_step_for_test(&self) {}
+
     fn await_era_world_with_port(&self, _: GroupPort) -> Result<TurnRight, ()> {
         unreachable!("compile-only era world wait")
     }
