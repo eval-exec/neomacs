@@ -233,17 +233,19 @@ pub(super) fn run(
             "clock mismatch: {sample}; {environment:?}"
         );
     }
-    if let Some(selected_budget) = &selected_budget
-        && report.assess(selected_budget) != latency::Assessment::WithinBudget
-    {
+    if let Some(selected_budget) = &selected_budget {
+        let assessment = report.assess(selected_budget);
+        let missed = assessment != latency::Assessment::WithinBudget;
         // The budget is unchanged. A miss on a contended host is not evidence
-        // about the editor, so it fails with a rerun diagnosis instead of
-        // reading as a pacing regression.
+        // about the editor, so it fails with a rerun diagnosis first instead
+        // of reading as a pacing regression. The budget assertion below stays
+        // the one Tier A1 latency site timing_assertion_ratchet pins for `run`.
         assert!(
-            !contention.contended(),
+            !(missed && contention.contended()),
             "host contended, rerun: {contention:?}; continuous scroll exceeded response budget: {report:?}; budget={selected_budget:?}; {environment:?}; {artifacts:?}"
         );
-        panic!(
+        assert!(
+            assessment == latency::Assessment::WithinBudget,
             "continuous scroll exceeded response budget on an uncontended host: {report:?}; budget={selected_budget:?}; {contention:?}; {environment:?}; {artifacts:?}"
         );
     }
