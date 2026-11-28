@@ -47,6 +47,7 @@
       ;; "{" and a carriage return, as on a CRLF line of a file decoded as
       ;; unix: the #855 reporter's point was on that CR (char 13, column 1).
       ('hidden-cr "{\r")
+      ('visible-cr "{\r")
       ('exact-width (make-string width ?x))
       ('width-minus-one (make-string (1- width) ?x))
       ('wrapped (make-string (+ width (/ width 2)) ?w))
@@ -113,7 +114,10 @@
     ;; evil-style normal state moves point back off the newline onto it.
     (mid-hidden-cr-evil hidden-cr (neo-row-walk-hide-cr neo-row-walk-evil-normal
                                    display-line-numbers-mode hl-line-mode)
-                        middle))
+                        middle)
+    ;; The same line with the CR visible as ^M: C-n from column 5 must land
+    ;; past the ^M on the newline, as GNU's line-move-visual does.
+    (mid-visible-cr-numbers visible-cr (display-line-numbers-mode hl-line-mode) middle))
   "(NAME LINE-99-SHAPE MODES [PLACEMENT]): one buffer per case.
 Each MODE is called with 1 in the case's buffer.  PLACEMENT `middle' puts
 line 98 in the middle of the window; otherwise it is on the last body row,

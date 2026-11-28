@@ -197,7 +197,7 @@ impl<'source, 'surface, B: LayoutBufferView + ?Sized>
         geometry: &DisplayRowGeometryState,
     ) -> DisplaySourceItemAppendContext<'source> {
         let frame = self.active_face_context(geometry).active_face_frame();
-        DisplaySourceItemAppendContext::with_face_attempt(
+        DisplaySourceItemAppendContext::for_source_walk(
             self.active_face.face_id(),
             self.active_face.resolved_face(),
             frame,

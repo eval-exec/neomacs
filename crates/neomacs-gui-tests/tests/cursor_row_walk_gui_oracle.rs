@@ -209,7 +209,7 @@ fn layout_y(line: &str) -> Option<f32> {
 }
 
 /// Cases in the fixture's `neo-row-walk-cases`.
-const CASES: usize = 27;
+const CASES: usize = 28;
 
 /// The cursor's buffer position and its row's `chars=START..END` range.
 fn cursor_charpos_and_row_chars(line: &str) -> Option<(i64, i64, i64)> {

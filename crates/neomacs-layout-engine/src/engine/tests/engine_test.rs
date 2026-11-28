@@ -40214,3 +40214,47 @@ fn gui_empty_tab_bar_does_not_publish_tty_fallback_chrome_band() {
         "GUI frame with no tab-bar items must not receive the TTY empty-row fallback"
     );
 }
+
+#[test]
+fn layout_frame_rust_control_char_points_count_the_line_number_gutter_once() {
+    // Issue #855 (D1/D2): a control character is appended through the
+    // special-character path.  With `display-line-numbers' it started from
+    // the row tail, which already holds the line-number glyphs, instead of
+    // the source walk's pen, which is already past the gutter, so its display
+    // point and every later point on the row were one gutter too far right
+    // while the glyphs and the cursor were not.  Those points answer
+    // `posn-at-point', `vertical-motion' and `posn-at-x-y'.  A TAB after the
+    // control character must also keep its stop.
+    let row_points = |text: &str, lnum: bool| {
+        let setup = move |buffer: &mut neovm_core::buffer::Buffer, _id: BufferId, _t: &str| {
+            if lnum {
+                buffer.set_buffer_local("display-line-numbers", Value::T);
+            }
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(3));
+        };
+        let trace = layout_trace_with_buffer_setup(text, 360, 180, setup);
+        let gutter = trace
+            .points
+            .iter()
+            .find(|point| point.row == 1)
+            .map(|point| point.x)
+            .expect("first point of row 1");
+        let points: Vec<(i64, i64, i64)> = trace
+            .points
+            .iter()
+            .filter(|point| point.row == 1)
+            .map(|point| (point.x - gutter, point.col, point.width))
+            .collect();
+        (gutter, points)
+    };
+    for text in ["a\n{\rx\nB\n", "a\n{\u{1}\tx\nB\n"] {
+        let (plain_gutter, plain) = row_points(text, false);
+        let (gutter, numbered) = row_points(text, true);
+        assert_eq!(plain_gutter, 0, "{text:?}: no gutter without line numbers");
+        assert!(gutter > 0, "{text:?}: line numbers reserve a gutter");
+        assert_eq!(
+            numbered, plain,
+            "{text:?}: with line numbers every point must move by the gutter once"
+        );
+    }
+}

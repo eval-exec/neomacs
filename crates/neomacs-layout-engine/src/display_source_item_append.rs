@@ -868,6 +868,7 @@ pub(crate) struct DisplaySourceItemAppendContext<'a> {
 }
 
 impl<'a> DisplaySourceItemAppendContext<'a> {
+    #[cfg(test)]
     pub(crate) fn with_face_attempt(
         face_id: FaceId,
         base_face: &'a ResolvedFace,
@@ -876,6 +877,21 @@ impl<'a> DisplaySourceItemAppendContext<'a> {
     ) -> Self {
         Self {
             single_item: SingleDisplayItemAppendContext::new(base_face, face_id, frame),
+            face_attempt,
+        }
+    }
+
+    /// A buffer-walk append: `position` is the iterator's pen, which already
+    /// starts after structural TEXT_AREA prefixes such as line numbers.  See
+    /// [`SingleDisplayItemAppendContext::for_source_walk`].
+    pub(crate) fn for_source_walk(
+        face_id: FaceId,
+        base_face: &'a ResolvedFace,
+        frame: DisplayRowAppendFrame,
+        face_attempt: FrameFaceAttempt,
+    ) -> Self {
+        Self {
+            single_item: SingleDisplayItemAppendContext::for_source_walk(base_face, face_id, frame),
             face_attempt,
         }
     }
