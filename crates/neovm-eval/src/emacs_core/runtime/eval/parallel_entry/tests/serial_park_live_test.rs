@@ -401,6 +401,7 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
                 let _ = notices_tx.send(queued);
             },
         );
+        let publishing = driver.publishing_owners_counter();
         let o = enroll_driver(era, &mut driver, &inbox, O);
         let b = enroll_driver(era, &mut driver, &inbox, B);
         let slow = era.register(L, 0).expect("register L");
@@ -500,6 +501,7 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
                         _ => {}
                     }
                 }
+                wait_until_publishing_settled(&publishing, "l67a-c3-r1 before releasing L");
                 l_go_tx.send(()).expect("tell L");
                 let s1 = parked.recv_timeout(BOUND).expect("O parked");
                 b_done.recv_timeout(BOUND).expect("B's turn ran");
@@ -769,6 +771,27 @@ fn l67a_an_owner_unwinding_mid_turn_poisons_and_wakes_the_rest() {
 
 const L: u64 = 7204;
 
+/// State-gated bounded wait until every requester has exited
+/// `ChannelPort::with_published_receipt` and dropped its `PublishingGuard`
+/// (`publishing_owners == 0`).
+///
+/// Without this barrier before releasing a pending stop, a requester that has
+/// already enqueued `KeeperMsg::Request` can still hold `publishing_owners > 0`
+/// under host CPU saturation when the first owner in the batch finishes its
+/// turn; `Driver::serve_owner` (`has_publishing_owners()`) then legitimately
+/// ends the stop early and splits the batch across two stops.
+fn wait_until_publishing_settled(publishing: &std::sync::atomic::AtomicUsize, context: &str) {
+    let deadline = Instant::now() + BOUND;
+    while publishing.load(Ordering::SeqCst) != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "{context}: publishing_owners did not settle to 0 within {BOUND:?} (still {})",
+            publishing.load(Ordering::SeqCst)
+        );
+        std::thread::yield_now();
+    }
+}
+
 /// D-10 (K8 r2). Running owner L has not met the stop A's request started.
 /// Each bounded attempt comes back pending and leaves the request standing:
 /// the keeper serves its inbox, so D's later request joins the same stop,
@@ -785,6 +808,7 @@ fn l67a_a_slow_owner_delays_the_stop_and_poisons_nothing() {
                 let _ = notices_tx.send((pending.clone(), queued));
             },
         );
+        let publishing = driver.publishing_owners_counter();
         let a = enroll_driver(era, &mut driver, &inbox, O);
         let d = enroll_driver(era, &mut driver, &inbox, B);
         let slow = era.register(L, 0).expect("register the slow owner");
@@ -848,6 +872,7 @@ fn l67a_a_slow_owner_delays_the_stop_and_poisons_nothing() {
                         first_pending = Some(pending);
                         d_go_tx.send(()).expect("tell D");
                     } else if queued == 2 {
+                        wait_until_publishing_settled(&publishing, "l67a-slow before releasing L");
                         l_go_tx.send(()).expect("tell L");
                         return (first_pending, pending);
                     }
@@ -1054,6 +1079,7 @@ fn l67a_driver_serves_its_snapshot_in_order_and_a_later_request_next_stop() {
                 }
             },
         );
+        let publishing = driver.publishing_owners_counter();
         let kits = [O, B, C, L].map(|owner| enroll_driver(era, &mut driver, &relay_tx, owner));
         drop(relay_tx);
         let order = Order::default();
@@ -1099,6 +1125,7 @@ fn l67a_driver_serves_its_snapshot_in_order_and_a_later_request_next_stop() {
                     }
                 }
                 relayed.recv_timeout(BOUND).expect("L's request is relayed");
+                wait_until_publishing_settled(&publishing, "l67a-fifo before releasing stop 1");
                 release_tx.send(()).expect("release the keeper");
             });
             assert_eq!(driver.run(), DriverEnd::Drained);
