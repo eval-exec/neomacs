@@ -690,3 +690,87 @@ fn native_maintenance_wait_redisplays_after_block_exit_sentinel_without_eof() {
         "after-block sentinel changes reached the producer before DeadlineElapsed"
     );
 }
+
+/// A tracked-motion fixture whose glyph memory already holds (10, 20).
+fn motion_fixture() -> (Context, InputGateOwner, u64) {
+    let mut eval = counted_context();
+    eval.eval_str("(setq track-mouse t)")
+        .expect("enable motion tracking");
+    let frame = eval
+        .frame_manager()
+        .selected_frame()
+        .expect("selected fixture frame")
+        .id
+        .0;
+    let owner = InputGateOwner::install(&mut eval);
+    owner
+        .publisher()
+        .send(tracked_motion(frame, 10.0, 20.0))
+        .expect("queue the first motion");
+    let first = eval.read_char().expect("read the first motion");
+    let slots = neovm_value::value::list_to_vec(&first).expect("motion event list");
+    assert_eq!(slots[0], Value::symbol("mouse-movement"));
+    eval.eval_str("(setq idle-wake-pre-count 0)")
+        .expect("reset the pre-redisplay counter");
+    (eval, owner, frame)
+}
+
+fn tracked_motion(frame: u64, x: f32, y: f32) -> InputEvent {
+    InputEvent::MouseMove {
+        x,
+        y,
+        modifiers: crate::keyboard::Modifiers::none(),
+        target_frame_id: frame,
+    }
+}
+
+/// GNU `x_note_mouse_movement` returns false for motion inside the glyph it
+/// last reported and queues nothing, so `wait_reading_process_output` keeps
+/// waiting without returning to `read_char` or redisplaying (xterm.c,
+/// process.c `detect_input_pending_run_timers`).  Only the read's own
+/// preliminary redisplay runs.
+#[test]
+fn suppressed_motion_wake_does_not_replay_pre_redisplay() {
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    let (mut eval, owner, frame) = motion_fixture();
+    let (gate, publication) = owner.gate(vec![tracked_motion(frame, 10.0, 20.0)]);
+    gate.arm(&mut eval, WaitWitness::InputWaitEntered);
+
+    let read = eval
+        .read_char_with_timeout(Some(Duration::from_millis(100)))
+        .expect("timed read");
+    publication.finish().expect("observed motion wait");
+    assert_eq!(read, None, "suppressed motion is not an event");
+    assert_pre_count(&mut eval, 1);
+}
+
+/// The waiver is for suppressed motion only: an event the evaluator
+/// consumes in the same wake still owes its redisplay, in either order.
+#[test]
+fn consumed_event_beside_suppressed_motion_keeps_its_redisplay() {
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    for motion_first in [true, false] {
+        let (mut eval, owner, frame) = motion_fixture();
+        let motion = tracked_motion(frame, 10.0, 20.0);
+        let consumed = InputEvent::MonitorsChanged { monitors: vec![] };
+        let batch = if motion_first {
+            vec![motion, consumed]
+        } else {
+            vec![consumed, motion]
+        };
+        let (gate, publication) = owner.gate(batch);
+        gate.arm(&mut eval, WaitWitness::InputWaitEntered);
+
+        let read = eval
+            .read_char_with_timeout(Some(Duration::from_millis(100)))
+            .expect("timed read");
+        publication.finish().expect("observed wait");
+        assert_eq!(read, None, "neither event is Lisp-visible");
+        assert_eq!(
+            eval.eval_symbol("idle-wake-pre-count")
+                .expect("Lisp callback count"),
+            Value::fixnum(2),
+            "motion_first={motion_first}: a consumed event keeps its redisplay"
+        );
+    }
+}

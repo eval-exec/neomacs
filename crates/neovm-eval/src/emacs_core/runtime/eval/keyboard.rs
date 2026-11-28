@@ -768,6 +768,41 @@ pub enum ReadCharRedisplayPhase {
     IdleMaintenance,
 }
 
+/// What one host input event produced for `read_char`.
+#[derive(Clone, Copy, Debug)]
+enum ReadCharInputOutcome {
+    /// A Lisp-visible event.
+    Event(Value),
+    /// The evaluator consumed the event itself (frontend bookkeeping, a
+    /// focus or resize notice).  The read loop redisplays before it waits
+    /// again, as GNU's `read_char` does when it loops back to its top.
+    Consumed,
+    /// Motion inside the glyph last reported.  GNU `x_note_mouse_movement`
+    /// returns false for it and queues nothing (xterm.c), so the wait in
+    /// `wait_reading_process_output` never returns to `read_char` and does
+    /// not redisplay (process.c, the `detect_input_pending_run_timers`
+    /// check).  It does not count as a reason to redisplay.
+    SuppressedMotion,
+}
+
+impl ReadCharInputOutcome {
+    fn into_event(self) -> Option<Value> {
+        match self {
+            Self::Event(value) => Some(value),
+            Self::Consumed | Self::SuppressedMotion => None,
+        }
+    }
+}
+
+/// Why `read_char`'s loop is back at its top.  Only a pass whose sole
+/// cause is host input may waive the preliminary redisplay for suppressed
+/// motion; every other pass keeps the redisplay it owes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadCharPassCause {
+    Other,
+    HostInput,
+}
+
 impl IdleTransitionPolicy {
     #[doc(hidden)]
     pub fn start_idle(self, eval: &mut crate::emacs_core::Context) {
@@ -4842,6 +4877,16 @@ impl crate::emacs_core::eval::Context {
         tty_input_decoding: TtyInputDecoding,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<Option<Value>, neovm_value::error::Flow> {
+        self.read_char_input_outcome(event, tty_input_decoding, idle_policy)
+            .map(ReadCharInputOutcome::into_event)
+    }
+
+    fn read_char_input_outcome(
+        &mut self,
+        event: InputEvent,
+        tty_input_decoding: TtyInputDecoding,
+        idle_policy: IdleTransitionPolicy,
+    ) -> Result<ReadCharInputOutcome, neovm_value::error::Flow> {
         self.handle_read_char_input_event_routed(event, tty_input_decoding, idle_policy, false)
     }
 
@@ -4851,14 +4896,14 @@ impl crate::emacs_core::eval::Context {
         tty_input_decoding: TtyInputDecoding,
         idle_policy: IdleTransitionPolicy,
         frame_already_routed: bool,
-    ) -> Result<Option<Value>, neovm_value::error::Flow> {
+    ) -> Result<ReadCharInputOutcome, neovm_value::error::Flow> {
         if super::frontend_events::interrupts(&event)
             && crate::emacs_core::eval::input_hooks::interrupt_for_input_event_if_requested(
                 self,
                 event.clone(),
             )?
         {
-            return Ok(None);
+            return Ok(ReadCharInputOutcome::Consumed);
         }
 
         match event {
@@ -4903,7 +4948,7 @@ impl crate::emacs_core::eval::Context {
                         },
                     );
                 }
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::TtyByte { byte, target } => {
                 if frame_already_routed {
@@ -4922,7 +4967,7 @@ impl crate::emacs_core::eval::Context {
                                     target,
                                 })),
                             );
-                            return Ok(None);
+                            return Ok(ReadCharInputOutcome::Consumed);
                         }
                         self.clear_current_message_for_keyboard_input();
                         let raw_event = Value::fixnum(i64::from(byte));
@@ -4931,7 +4976,7 @@ impl crate::emacs_core::eval::Context {
                         }
                         let emacs_event = self.translate_fresh_character_event(raw_event);
                         self.command_loop.store_kbd_macro_event(emacs_event);
-                        Ok(Some(emacs_event))
+                        Ok(ReadCharInputOutcome::Event(emacs_event))
                     }
                     TtyInputDecoding::KeyboardCodingSystem => {
                         let coding_system = neovm_value::intern::resolve_sym(
@@ -4956,7 +5001,7 @@ impl crate::emacs_core::eval::Context {
                                 },
                             );
                         }
-                        Ok(None)
+                        Ok(ReadCharInputOutcome::Consumed)
                     }
                 }
             }
@@ -4973,7 +5018,7 @@ impl crate::emacs_core::eval::Context {
                             target,
                         })),
                     );
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 self.clear_current_message_for_keyboard_input();
                 let raw_event = Value::fixnum(i64::from(character.code()));
@@ -4985,15 +5030,15 @@ impl crate::emacs_core::eval::Context {
                 }
                 let emacs_event = self.translate_fresh_character_event(raw_event);
                 self.command_loop.store_kbd_macro_event(emacs_event);
-                Ok(Some(emacs_event))
+                Ok(ReadCharInputOutcome::Event(emacs_event))
             }
             InputEvent::WindowClose { emacs_frame_id } => {
                 self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::TtyHangup { terminal_id } => {
                 self.delete_input_terminal_noelisp(terminal_id)?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::ThreadEvent {
                 sender,
@@ -5021,9 +5066,9 @@ impl crate::emacs_core::eval::Context {
                     data,
                 ]);
                 if self.execute_special_event_if_bound(event)? {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::Resize {
                 width,
@@ -5036,7 +5081,7 @@ impl crate::emacs_core::eval::Context {
                     self.redisplay()?;
                 }
                 idle_policy.resume_idle(self);
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::ResizeRequestCompleted {
                 request_id,
@@ -5044,7 +5089,7 @@ impl crate::emacs_core::eval::Context {
             } => {
                 apply_gui_resize_request_completion(&mut self.frames, request_id, emacs_frame_id);
                 idle_policy.resume_idle(self);
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::DisplayReset => {
                 // Mirrors the WindowResize shape: apply, redisplay, resume
@@ -5053,7 +5098,7 @@ impl crate::emacs_core::eval::Context {
                 self.handle_display_reset_input_event();
                 self.redisplay()?;
                 idle_policy.resume_idle(self);
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::WebView(event) => {
                 if crate::emacs_core::eval::hooks_proof::frontend::apply_xwidget_frontend_event(
@@ -5061,30 +5106,30 @@ impl crate::emacs_core::eval::Context {
                 )? {
                     self.redisplay()?;
                 }
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::SurfaceCreateFailed { id, error } => {
                 self.handle_surface_create_failed_input_event(id, &error)?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::FrameShaderFailed { error } => {
                 let effects = super::frontend_events::report_frame_shader_failure(self, &error)?;
                 if effects.redisplay_needed {
                     self.redisplay()?;
                 }
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::TerminalCreateFailed { id, error } => {
                 self.handle_terminal_create_failed_input_event(id, &error)?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::TerminalExited { id } => {
                 self.handle_terminal_exited_input_event(id)?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::TerminalTitleChanged { id, title } => {
                 self.handle_terminal_title_changed_input_event(id, &title)?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::Focus {
                 focused,
@@ -5100,7 +5145,7 @@ impl crate::emacs_core::eval::Context {
                 idle_policy.resume_idle(self);
                 if let Some(event) = self.make_lispy_focus_event(focused, emacs_frame_id) {
                     if self.execute_special_event_if_bound(event)? {
-                        return Ok(None);
+                        return Ok(ReadCharInputOutcome::Consumed);
                     }
                     if focused {
                         // GNU `frame.el` routes `handle-focus-in` through the
@@ -5114,9 +5159,9 @@ impl crate::emacs_core::eval::Context {
                             vec![event],
                         )?;
                     }
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::MonitorsChanged { monitors } => {
                 idle_policy.resume_idle(self);
@@ -5128,23 +5173,25 @@ impl crate::emacs_core::eval::Context {
                 let terminal = crate::emacs_core::eval::lifecycle::terminal_handle_value();
                 let _ =
                     crate::emacs_core::hook_runtime::run_named_hook(self, hook_sym, &[terminal])?;
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::SystemFontsChanged { fonts, display } => {
                 if self.handle_system_fonts_input_event(fonts, display)? {
                     self.redisplay()?;
                 }
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::SystemFontRenderingChanged { display } => {
                 if self.handle_system_font_rendering_input_event(display)? {
                     self.redisplay()?;
                 }
-                Ok(None)
+                Ok(ReadCharInputOutcome::Consumed)
             }
             InputEvent::SelectWindow { window_id } => {
                 idle_policy.resume_idle(self);
-                Ok(self.make_lispy_select_window_event(window_id))
+                Ok(self
+                    .make_lispy_select_window_event(window_id)
+                    .map_or(ReadCharInputOutcome::Consumed, ReadCharInputOutcome::Event))
             }
             InputEvent::NativeNonKey {
                 kind,
@@ -5162,12 +5209,12 @@ impl crate::emacs_core::eval::Context {
                             emacs_frame_id,
                         })),
                     );
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 self.clear_current_message_for_keyboard_input();
                 let event = kind.to_emacs_event_value();
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::KeyPress {
                 key,
@@ -5188,7 +5235,7 @@ impl crate::emacs_core::eval::Context {
                             emacs_frame_id,
                         })),
                     );
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 tracing::debug!("read_char: received KeyPress {:?}", key);
                 self.clear_current_message_for_keyboard_input();
@@ -5198,7 +5245,7 @@ impl crate::emacs_core::eval::Context {
                 }
                 let emacs_event = self.translate_fresh_character_event(raw_event);
                 self.command_loop.store_kbd_macro_event(emacs_event);
-                Ok(Some(emacs_event))
+                Ok(ReadCharInputOutcome::Event(emacs_event))
             }
             InputEvent::MousePress {
                 button,
@@ -5246,7 +5293,7 @@ impl crate::emacs_core::eval::Context {
                 };
                 let event = Self::make_mouse_event(self, &button, &modifiers, &prefix, payload);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::MouseRelease {
                 button,
@@ -5263,7 +5310,7 @@ impl crate::emacs_core::eval::Context {
                 let Some(press) =
                     self.command_loop.keyboard.kboard.button_down[mouse_button_slot(button)].take()
                 else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 // GNU `keyboard.c:6610-6710`: an up event is a drag, not a
                 // click, when the frame-relative pointer moved outside
@@ -5294,7 +5341,7 @@ impl crate::emacs_core::eval::Context {
                 let event =
                     Self::make_mouse_event(self, &button, &Modifiers::none(), &prefix, payload);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::MouseScroll {
                 delta_x,
@@ -5309,7 +5356,7 @@ impl crate::emacs_core::eval::Context {
                     || !delta_y.is_finite()
                     || (delta_x == 0.0 && delta_y == 0.0)
                 {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 let dir = if delta_x.abs() > delta_y.abs() {
                     if delta_x > 0.0 {
@@ -5339,7 +5386,7 @@ impl crate::emacs_core::eval::Context {
                     Value::fixnum(count),
                 ]);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::PixelScroll {
                 delta_x,
@@ -5354,7 +5401,7 @@ impl crate::emacs_core::eval::Context {
                     || !delta_y.is_finite()
                     || (delta_x == 0.0 && delta_y == 0.0)
                 {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 let direction = if delta_x.abs() > delta_y.abs() {
                     if delta_x > 0.0 {
@@ -5388,7 +5435,7 @@ impl crate::emacs_core::eval::Context {
                     ),
                 ]);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::PresentedRegion { .. }
             | InputEvent::LayoutInvalidated
@@ -5407,14 +5454,14 @@ impl crate::emacs_core::eval::Context {
                     parts.push(Value::fixnum(token.revision as i64));
                 }
                 let event = Value::list(parts);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::ToolBarClick {
                 index,
                 emacs_frame_id,
             } => {
                 let Some(key) = self.tool_bar_key_at_index(index, emacs_frame_id) else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 let frame = self.event_frame_value(emacs_frame_id);
                 let event = Value::list(vec![
@@ -5422,7 +5469,7 @@ impl crate::emacs_core::eval::Context {
                     Value::list(vec![frame, Value::symbol("tool-bar")]),
                 ]);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::PresentedPointer {
                 presentation,
@@ -5435,13 +5482,13 @@ impl crate::emacs_core::eval::Context {
             } => {
                 let Some(target) = self.resolve_presented_mouse_target(presentation, interaction)
                 else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 let Some(frame_id) = self.event_frame_id(emacs_frame_id) else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 if self.frames.get(frame_id).is_none() || button == 0 {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 let area = match target.area {
                     PresentedMouseArea::TabBar => "tab-bar",
@@ -5462,7 +5509,7 @@ impl crate::emacs_core::eval::Context {
                     },
                 });
                 let Some(mut position_parts) = neovm_value::value::list_to_vec(&position) else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 position_parts[4] = target.posn_string;
                 let symbol = if pressed {
@@ -5475,7 +5522,7 @@ impl crate::emacs_core::eval::Context {
                     Value::list(position_parts),
                 ]);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::PresentationActivated { .. }
             | InputEvent::PresentationDiscarded { .. }
@@ -5495,13 +5542,13 @@ impl crate::emacs_core::eval::Context {
                 emacs_frame_id,
             } => {
                 if index < 0 {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 let Some(frame_id) = self.event_frame_id(emacs_frame_id) else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 if self.frames.get(frame_id).is_none() {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 self.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
                     request_id,
@@ -5523,10 +5570,10 @@ impl crate::emacs_core::eval::Context {
                     anchor_height,
                     emacs_frame_id,
                 ) else {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 };
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
             InputEvent::MouseMove {
                 x,
@@ -5538,15 +5585,15 @@ impl crate::emacs_core::eval::Context {
                 idle_policy.resume_idle(self);
                 if !self.track_mouse_enabled() {
                     self.forget_last_mouse_glyph();
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::Consumed);
                 }
                 if !self.should_emit_mouse_movement(x, y, target_frame_id) {
-                    return Ok(None);
+                    return Ok(ReadCharInputOutcome::SuppressedMotion);
                 }
                 self.clear_current_message_for_keyboard_input();
                 let event = self.make_lispy_movement(x, y, target_frame_id);
                 self.command_loop.store_kbd_macro_event(event);
-                Ok(Some(event))
+                Ok(ReadCharInputOutcome::Event(event))
             }
         }
     }
@@ -5583,8 +5630,10 @@ impl crate::emacs_core::eval::Context {
         let mut idle_auto_save_deadline = None;
         let mut key_echo_deadline = self.delayed_key_echo_deadline(timeout);
         let mut redisplay_phase = ReadCharRedisplayPhase::Preliminary;
+        let mut pass_cause = ReadCharPassCause::Other;
 
         loop {
+            let this_pass = std::mem::replace(&mut pass_cause, ReadCharPassCause::Other);
             self.sync_keyboard_terminal_owner();
             // Service cross-thread tasks (e.g. diagnostics profile capture) at
             // this Lisp-safe point — between forms, never mid-primitive. Runs on
@@ -5606,17 +5655,26 @@ impl crate::emacs_core::eval::Context {
             }
             if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
                 let origin = event.read_char_origin();
-                if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
-                    event,
-                    tty_input_decoding,
-                    idle_policy,
-                )? {
-                    return Ok(Some(ReadCharEvent {
-                        origin,
-                        ..ReadCharEvent::fresh_input_method_candidate(value)
-                    }));
+                match self.read_char_input_outcome(event, tty_input_decoding, idle_policy)? {
+                    ReadCharInputOutcome::Event(value) => {
+                        return Ok(Some(ReadCharEvent {
+                            origin,
+                            ..ReadCharEvent::fresh_input_method_candidate(value)
+                        }));
+                    }
+                    // A wake whose only input so far is suppressed motion
+                    // resumes the same wait, as GNU's wait loop does when
+                    // x_note_mouse_movement queues nothing.
+                    ReadCharInputOutcome::SuppressedMotion
+                        if this_pass == ReadCharPassCause::HostInput =>
+                    {
+                        redisplay_phase = ReadCharRedisplayPhase::IdleMaintenance;
+                        pass_cause = ReadCharPassCause::HostInput;
+                    }
+                    ReadCharInputOutcome::SuppressedMotion | ReadCharInputOutcome::Consumed => {
+                        redisplay_phase = ReadCharRedisplayPhase::Preliminary;
+                    }
                 }
-                redisplay_phase = ReadCharRedisplayPhase::Preliminary;
                 continue;
             }
             if self.shutdown_request.is_some() {
@@ -5668,15 +5726,20 @@ impl crate::emacs_core::eval::Context {
 
             if let Some(event) = self.drain_ready_input_event_for_read_char(idle_policy)? {
                 let origin = event.read_char_origin();
-                if let Some(value) = self.handle_read_char_input_event_with_idle_policy(
-                    event,
-                    tty_input_decoding,
-                    idle_policy,
-                )? {
-                    return Ok(Some(ReadCharEvent {
-                        origin,
-                        ..ReadCharEvent::fresh_input_method_candidate(value)
-                    }));
+                match self.read_char_input_outcome(event, tty_input_decoding, idle_policy)? {
+                    ReadCharInputOutcome::Event(value) => {
+                        return Ok(Some(ReadCharEvent {
+                            origin,
+                            ..ReadCharEvent::fresh_input_method_candidate(value)
+                        }));
+                    }
+                    // The preliminary redisplay above already ran and
+                    // nothing since then owes another one.
+                    ReadCharInputOutcome::SuppressedMotion => {
+                        redisplay_phase = ReadCharRedisplayPhase::IdleMaintenance;
+                        pass_cause = ReadCharPassCause::HostInput;
+                    }
+                    ReadCharInputOutcome::Consumed => {}
                 }
                 continue;
             }
@@ -5772,6 +5835,7 @@ impl crate::emacs_core::eval::Context {
             match wait_result? {
                 CommandInputWaitOutcome::InputPending => {
                     idle_policy.stop_idle(self);
+                    pass_cause = ReadCharPassCause::HostInput;
                     continue;
                 }
                 CommandInputWaitOutcome::DeadlineElapsed => {
@@ -6179,7 +6243,7 @@ impl crate::emacs_core::eval::Context {
     /// GNU `note_mouse_movement` + `remember_mouse_glyph`
     /// (`src/pgtkterm.c:5899-5947`, `src/xdisp.c:2789-2820`): suppress
     /// redundant `mouse-movement` events while the pointer remains within the
-    /// last reported glyph bounding box on the same frame and presentation.
+    /// last reported glyph bounding box on the same frame.
     fn should_emit_mouse_movement(&mut self, x: f32, y: f32, target_frame_id: u64) -> bool {
         let Some(frame_id) = self.resolve_input_frame_id(target_frame_id) else {
             self.forget_last_mouse_glyph();

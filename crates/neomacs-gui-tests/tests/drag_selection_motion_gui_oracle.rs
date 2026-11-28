@@ -167,3 +167,50 @@ fn drag_motion_reaches_lisp_once_per_glyph_like_gnu_on_x11() {
         assert_eq!(actual[key], gnu[key], "{key}: gnu {gnu}\nneo {actual}");
     }
 }
+
+/// Motion inside the glyph last reported queues nothing in GNU
+/// (`x_note_mouse_movement` returns false), so the wait never returns to
+/// `read_char` and never redisplays for it.  A redisplay is owed to a
+/// delivered step or to a scroll or timer step, and the fixture's own count
+/// of glyph cells crossed bounds the second kind.
+#[test]
+fn drag_redisplays_only_for_delivered_steps_like_gnu_on_x11() {
+    let root = neomacs_infra::workspace_root();
+    let artifacts = root.join("target/neomacs-gui-tests/drag-selection-redisplay");
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+    assert!(
+        oracle.is_attested(),
+        "set NEOVM_FORCE_ORACLE_PATH to the pinned GUI oracle"
+    );
+    let neo = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target/release/neomacs"));
+    let gnu = observe(
+        &root,
+        &artifacts.join("gnu"),
+        &oracle.executable_path(),
+        "gnu",
+    );
+    let actual = observe(&root, &artifacts.join("neo"), &neo, "neo");
+
+    let counts = |result: &Value| {
+        (
+            result["redisplay_count"].as_u64().expect("redisplay_count"),
+            result["move_count"].as_u64().expect("move_count"),
+            result["cell_changes"].as_u64().expect("cell_changes"),
+        )
+    };
+    let (gnu_redisplays, gnu_moves, gnu_cells) = counts(&gnu);
+    assert!(
+        gnu_redisplays >= gnu_moves && gnu_redisplays <= gnu_moves + gnu_cells,
+        "precondition: GNU redisplays for each delivered step plus at most one \
+         per glyph cell crossed: {gnu}"
+    );
+    let (neo_redisplays, neo_moves, neo_cells) = counts(&actual);
+    assert!(
+        neo_redisplays <= neo_moves + neo_cells,
+        "Neomacs redisplayed {neo_redisplays} times for {neo_moves} drag steps and \
+         {neo_cells} glyph-cell changes (GNU {gnu_redisplays} for {gnu_moves} and \
+         {gnu_cells}): {actual}"
+    );
+}
