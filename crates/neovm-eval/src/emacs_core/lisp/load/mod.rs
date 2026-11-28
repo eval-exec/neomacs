@@ -5912,6 +5912,7 @@ pub(crate) fn finalize_cached_bootstrap_eval(
     // are re-applied.  See emacs_core::post_image_init for the table and the
     // GNU citation behind every row.
     crate::emacs_core::eval::lifecycle::apply_post_image_init(eval);
+    eval.processes.ensure_wait_backend();
 
     restore_gnu_stale_preloaded_face_doc_refs(eval);
     // Some GNU C-level variables, notably `data-directory`, become bound only
@@ -6795,6 +6796,26 @@ pub fn load_runtime_image(
     load_runtime_image_for_executable(role, extra_features, dump_path, &executable, proof)
 }
 
+/// Load a runtime image from disk and provide `extra_features`, stopping
+/// right before [`activate_runtime_evaluator`] so a fork-zygote server can
+/// share the deserialized image across forked children while each child runs
+/// post-image initialization with its own OS environment, cwd, umask, and PID.
+pub fn load_unactivated_runtime_image(
+    role: RuntimeImageRole,
+    extra_features: &[&str],
+    dump_path: Option<&Path>,
+    proof: EvalHooksInstalled,
+) -> Result<super::eval::Context, EvalError> {
+    let executable = runtime_image_executable(role, dump_path);
+    load_unactivated_runtime_image_for_executable(
+        role,
+        extra_features,
+        dump_path,
+        &executable,
+        proof,
+    )
+}
+
 fn runtime_image_executable(role: RuntimeImageRole, dump_path: Option<&Path>) -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -6820,7 +6841,7 @@ pub fn runtime_image_available(role: RuntimeImageRole) -> bool {
         .any(|candidate| candidate.exists())
 }
 
-pub fn load_runtime_image_for_executable(
+pub fn load_unactivated_runtime_image_for_executable(
     role: RuntimeImageRole,
     extra_features: &[&str],
     dump_path: Option<&Path>,
@@ -6829,7 +6850,6 @@ pub fn load_runtime_image_for_executable(
 ) -> Result<super::eval::Context, EvalError> {
     use super::pdump;
 
-    let project_root = runtime_project_root();
     let candidates = dump_path
         .map(|path| vec![path.to_path_buf()])
         .unwrap_or_else(|| runtime_image_candidate_paths_for_executable(executable, role));
@@ -6837,7 +6857,7 @@ pub fn load_runtime_image_for_executable(
         let mut last_error = None;
         let mut loaded = None;
         for (index, candidate) in candidates.iter().enumerate() {
-            match pdump::load_from_dump_with_proof(candidate, proof) {
+            match pdump::load_from_dump_deferred_io_with_proof(candidate, proof) {
                 Ok(eval) => {
                     loaded = Some(eval);
                     break;
@@ -6879,6 +6899,25 @@ pub fn load_runtime_image_for_executable(
             let _ = eval.provide_value(Value::from_sym_id(intern((feature).as_ref())), None);
         }
     }
+
+    Ok(eval)
+}
+
+pub fn load_runtime_image_for_executable(
+    role: RuntimeImageRole,
+    extra_features: &[&str],
+    dump_path: Option<&Path>,
+    executable: &Path,
+    proof: EvalHooksInstalled,
+) -> Result<super::eval::Context, EvalError> {
+    let project_root = runtime_project_root();
+    let mut eval = load_unactivated_runtime_image_for_executable(
+        role,
+        extra_features,
+        dump_path,
+        executable,
+        proof,
+    )?;
 
     activate_runtime_evaluator_at_root(&mut eval, &project_root, role)?;
 

@@ -20,7 +20,7 @@ use super::load::{
     BootstrapError, LoadupInvocation, RuntimeImageRole, bootstrap_evaluator_cached,
     bootstrap_evaluator_cached_at_path, bootstrap_evaluator_cached_with_features,
     bootstrap_evaluator_for_loadup, bootstrap_evaluator_with_features, load_runtime_image,
-    load_runtime_image_for_executable, runtime_startup_evaluator,
+    load_runtime_image_for_executable, load_unactivated_runtime_image, runtime_startup_evaluator,
     runtime_startup_evaluator_at_path, runtime_startup_evaluator_cached,
     runtime_startup_evaluator_cached_with_features, runtime_startup_evaluator_with_features,
 };
@@ -118,6 +118,20 @@ pub fn load_runtime_image_with_features(
 ) -> Result<Context, EvalError> {
     let proof = install_eval_hooks();
     load_runtime_image(role, extra_features, dump_path, proof)
+}
+
+/// Load a runtime image for ROLE without running post-image activation.
+///
+/// Used by the batch fork-zygote so `pdump` deserialization runs once in the
+/// parent and each forked child activates against its own OS environment, cwd,
+/// umask, and PID.
+pub fn load_unactivated_runtime_image_with_features(
+    role: RuntimeImageRole,
+    extra_features: &[&str],
+    dump_path: Option<&Path>,
+) -> Result<Context, EvalError> {
+    let proof = install_eval_hooks();
+    load_unactivated_runtime_image(role, extra_features, dump_path, proof)
 }
 
 /// Load a runtime image for ROLE using an explicit EXECUTABLE.

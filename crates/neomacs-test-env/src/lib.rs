@@ -808,6 +808,21 @@ impl PinnedCommand {
         self
     }
 
+    /// Start the child in its own session (`setsid`) so it is detached from
+    /// the caller's process group (used for shared per-run test daemons).
+    #[cfg(unix)]
+    pub fn detach_session(&mut self) -> &mut Self {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `setsid()` is async-signal-safe.
+        unsafe {
+            self.command.pre_exec(|| {
+                let _ = libc::setsid();
+                Ok(())
+            });
+        }
+        self
+    }
+
     /// Start the child in a new session whose controlling terminal is stdin.
     ///
     /// This is the PTY harness's session wiring: `setsid(2)` detaches the
@@ -947,6 +962,22 @@ impl PinnedCommand {
             });
         }
         self
+    }
+
+    /// The program path this command will execute.
+    pub fn get_program(&self) -> &OsStr {
+        self.command.get_program()
+    }
+
+    /// The arguments this command will pass to the program.
+    pub fn get_args(&self) -> std::process::CommandArgs<'_> {
+        self.command.get_args()
+    }
+
+    /// The explicit environment overrides (`Some(v)` set, `None` removed) on
+    /// this command.
+    pub fn get_envs(&self) -> std::process::CommandEnvs<'_> {
+        self.command.get_envs()
     }
 
     /// The current directory this command will run in, if set.  Read-only:

@@ -148,13 +148,30 @@ impl GlobalState {
         state
     }
 
+    #[doc(hidden)]
+    pub(crate) fn fresh_deferred_io_then(
+        command_loop: crate::emacs_core::eval::data::command_loop::CommandLoop,
+        apply: impl FnOnce(&mut Self),
+    ) -> Self {
+        let mut state = Self::fresh_with_processes(command_loop, ProcessManager::new_deferred());
+        apply(&mut state);
+        state
+    }
+
     /// A new World's state, COMMAND_LOOP being its first owner's.
     #[doc(hidden)]
     pub fn fresh(command_loop: crate::emacs_core::eval::data::command_loop::CommandLoop) -> Self {
+        Self::fresh_with_processes(command_loop, ProcessManager::new())
+    }
+
+    fn fresh_with_processes(
+        command_loop: crate::emacs_core::eval::data::command_loop::CommandLoop,
+        processes: ProcessManager,
+    ) -> Self {
         Self {
             cached_system_name: Value::NIL,
             xwidgets: super::data::xwidget::XwidgetState::new(),
-            processes: ProcessManager::new(),
+            processes,
             selected_global_map: crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap::default(
             ),
             registers: RegisterManager::new(),

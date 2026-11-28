@@ -1,0 +1,1035 @@
+//! Client for the pre-booted Neomacs batch `fork()` zygote server.
+//!
+//! Routes eligible Neomacs oracle evaluations (default-environment batch runs
+//! on Linux and macOS) through a shared per-run zygote daemon over a Unix
+//! domain socket so the 21 MiB `neomacs.pdump` is loaded once per nextest run
+//! instead of once per test case, while every test still executes inside its
+//! own OS-isolated `fork()`ed child process.
+//!
+//! Enabled on Linux and macOS (`#[cfg(any(target_os = "linux", target_os = "macos"))]`),
+//! where peer UID verification (`SO_PEERCRED` / `getpeereid`) is supported.
+//! Falls back transparently to normal `Command::output()` when disabled
+//! (`NEOVM_ORACLE_ZYGOTE=0`), on other platforms, when the binary has no final
+//! pdump image (e.g. debug builds), or for tests with custom pre-boot
+//! environment overrides.
+
+use std::process::Output;
+use std::time::Duration;
+
+use neomacs_test_env::PinnedCommand;
+
+use crate::common::oracle_sandbox::OracleSandbox;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn try_run_neomacs_via_zygote(
+    _cmd: &PinnedCommand,
+    _sandbox: &OracleSandbox,
+    _rlimit_as: Option<u64>,
+    _timeout: Option<Duration>,
+) -> Option<Result<Output, String>> {
+    None
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn try_run_neomacs_via_zygote(
+    cmd: &PinnedCommand,
+    sandbox: &OracleSandbox,
+    rlimit_as: Option<u64>,
+    timeout: Option<Duration>,
+) -> Option<Result<Output, String>> {
+    unix_impl::try_run_neomacs_via_zygote(cmd, sandbox, rlimit_as, timeout)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_impl {
+    use std::collections::BTreeMap;
+    use std::collections::hash_map::DefaultHasher;
+    use std::ffi::{OsStr, OsString};
+    use std::fs::{self, OpenOptions};
+    use std::hash::{Hash, Hasher};
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::ExitStatusExt;
+    use std::path::{Path, PathBuf};
+    use std::process::{ExitStatus, Output, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use neomacs_test_env::{CANONICAL_UMASK, PinnedCommand, bounded_temp_base, bounded_temp_dir};
+
+    use crate::common::oracle_sandbox::OracleSandbox;
+
+    const WIRE_MAGIC: &[u8; 4] = b"NVZ2";
+    const RESP_EXITED: u8 = 0;
+    const RESP_SIGNALED: u8 = 1;
+    const STARTUP_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// POSIX signals whose `SIG_IGN` disposition is preserved across `execve()`
+    /// and propagated from the calling test process into each forked zygote
+    /// child. Must stay in identical bit order with `zygote::INHERITED_SIGNALS`.
+    const INHERITED_SIGNALS: [libc::c_int; 8] = [
+        libc::SIGHUP,
+        libc::SIGINT,
+        libc::SIGQUIT,
+        libc::SIGPROF,
+        libc::SIGTERM,
+        libc::SIGTTOU,
+        libc::SIGTTIN,
+        libc::SIGTSTP,
+    ];
+
+    /// Latched when the target binary cannot launch a zygote (e.g. a debug
+    /// build without a final pdump), so subsequent calls in this process fall
+    /// back directly to `Command::output()` without retrying spawn.
+    static ZYGOTE_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+
+    fn zygote_enabled() -> bool {
+        if ZYGOTE_UNAVAILABLE.load(Ordering::Relaxed) {
+            return false;
+        }
+        match std::env::var("NEOVM_ORACLE_ZYGOTE").ok().as_deref() {
+            Some("0" | "off" | "false" | "no") => return false,
+            Some("1" | "on" | "true" | "yes") => return true,
+            _ => {}
+        }
+        // Enable automatically under `cargo nextest`, where thousands of test
+        // processes share one `NEXTEST_RUN_ID`. Outside nextest (single ad-hoc
+        // test invocation), opt in via `NEOVM_ORACLE_ZYGOTE=1`.
+        std::env::var_os("NEXTEST_RUN_ID").is_some_and(|v| !v.is_empty())
+    }
+
+    /// Create or verify a user-private (`0700`, non-symlink, owned by `geteuid()`)
+    /// directory under `bounded_temp_base()` for zygote sockets and lockfiles.
+    ///
+    /// Keeping endpoints inside a `0700` user-owned directory prevents another
+    /// local user on a shared `/tmp` from pre-binding a predictable socket path
+    /// and capturing environment variables sent in requests.
+    fn ensure_private_socket_dir() -> Result<PathBuf, String> {
+        // SAFETY: `geteuid()` has no preconditions.
+        let euid = unsafe { libc::geteuid() };
+        let dir = bounded_temp_base().join(format!("nvz-{euid}"));
+        if let Err(err) = fs::DirBuilder::new().mode(0o700).create(&dir)
+            && err.kind() != std::io::ErrorKind::AlreadyExists
+        {
+            return Err(format!(
+                "failed to create private zygote dir {}: {err}",
+                dir.display()
+            ));
+        }
+        let meta = fs::symlink_metadata(&dir)
+            .map_err(|err| format!("failed to stat private zygote dir {}: {err}", dir.display()))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(format!(
+                "refusing non-directory zygote path {}",
+                dir.display()
+            ));
+        }
+        if meta.uid() != euid || (meta.mode() & 0o077) != 0 {
+            return Err(format!(
+                "refusing insecure zygote dir {} (uid={}, mode={:o})",
+                dir.display(),
+                meta.uid(),
+                meta.mode() & 0o777
+            ));
+        }
+        Ok(dir)
+    }
+
+    fn verify_owned_socket(sock_path: &Path) -> Result<(), String> {
+        // SAFETY: `geteuid()` has no preconditions.
+        let euid = unsafe { libc::geteuid() };
+        let meta = fs::symlink_metadata(sock_path).map_err(|err| {
+            format!(
+                "failed to stat zygote socket {}: {err}",
+                sock_path.display()
+            )
+        })?;
+        if meta.file_type().is_symlink() || !meta.file_type().is_socket() || meta.uid() != euid {
+            return Err(format!(
+                "refusing untrusted zygote socket {} (uid={})",
+                sock_path.display(),
+                meta.uid()
+            ));
+        }
+        Ok(())
+    }
+
+    struct ZygoteEndpoint {
+        path: PathBuf,
+        /// True when `path` lives inside our user-private `0700` directory
+        /// created by `ensure_private_socket_dir()`, where reclaiming stale
+        /// sockets is safe; false for explicit `NEOVM_ORACLE_ZYGOTE_SOCK`
+        /// paths in caller-chosen directories.
+        managed_dir: bool,
+    }
+
+    fn socket_endpoint_for(program: &OsStr) -> Result<ZygoteEndpoint, String> {
+        if let Some(explicit) = std::env::var_os("NEOVM_ORACLE_ZYGOTE_SOCK")
+            && !explicit.is_empty()
+        {
+            return Ok(ZygoteEndpoint {
+                path: PathBuf::from(explicit),
+                managed_dir: false,
+            });
+        }
+        let dir = ensure_private_socket_dir()?;
+        let run_id = std::env::var("NEXTEST_RUN_ID").unwrap_or_else(|_| "manual".to_string());
+        let mut hasher = DefaultHasher::new();
+        program.as_bytes().hash(&mut hasher);
+        run_id.hash(&mut hasher);
+        let digest = hasher.finish();
+        // Keep socket path short (< 50 bytes) so it fits well inside macOS's
+        // 104-byte `sun_path` limit.
+        Ok(ZygoteEndpoint {
+            path: dir.join(format!("{digest:016x}.sock")),
+            managed_dir: true,
+        })
+    }
+
+    fn lock_path_for(sock_path: &Path) -> PathBuf {
+        // Append `.lock` rather than replacing the extension so an explicit
+        // socket path already ending in `.lock` never collides with its own
+        // startup lock file.
+        let mut os = sock_path.as_os_str().to_os_string();
+        os.push(".lock");
+        PathBuf::from(os)
+    }
+
+    /// Identify the owning `cargo-nextest` PID when running under nextest so
+    /// the zygote exits promptly (~250ms) once the test run finishes.
+    fn detect_nextest_watch_pid() -> Option<libc::pid_t> {
+        if std::env::var_os("NEXTEST_RUN_ID").is_none_or(|v| v.is_empty()) {
+            return None;
+        }
+        // SAFETY: `getppid()` has no preconditions.
+        let ppid = unsafe { libc::getppid() };
+        if ppid <= 1 {
+            return None;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let comm = fs::read_to_string(format!("/proc/{ppid}/comm")).ok()?;
+            if !comm.trim().contains("nextest") {
+                return None;
+            }
+        }
+        Some(ppid)
+    }
+
+    fn acquire_flock(lock_path: &Path) -> Result<fs::File, String> {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .map_err(|e| format!("failed to open zygote lock {}: {e}", lock_path.display()))?;
+        loop {
+            // SAFETY: `file` is a valid open file descriptor.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if rc == 0 {
+                return Ok(file);
+            }
+            let err = std::io::Error::last_os_error();
+            if err.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!(
+                    "failed to flock zygote lock {}: {err}",
+                    lock_path.display()
+                ));
+            }
+        }
+    }
+
+    /// Verify via kernel peer credentials (`SO_PEERCRED` on Linux, `getpeereid`
+    /// on macOS) that the connected zygote listener is running as the same
+    /// effective user before sending any environment variables or arguments.
+    fn verify_peer_same_uid(stream: &UnixStream) -> Result<(), String> {
+        // SAFETY: `geteuid()` has no preconditions.
+        let expected_uid = unsafe { libc::geteuid() };
+        let fd = stream.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        {
+            let mut cred = libc::ucred {
+                pid: 0,
+                uid: u32::MAX,
+                gid: u32::MAX,
+            };
+            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+            // SAFETY: valid connected Unix socket fd and properly sized `ucred`.
+            let rc = unsafe {
+                libc::getsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_PEERCRED,
+                    (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+                    &mut len,
+                )
+            };
+            if rc != 0 {
+                return Err(format!(
+                    "failed to query SO_PEERCRED on zygote socket: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if cred.uid != expected_uid {
+                return Err(format!(
+                    "refusing zygote listener owned by uid {} (expected {})",
+                    cred.uid, expected_uid
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut euid: libc::uid_t = u32::MAX;
+            let mut egid: libc::gid_t = u32::MAX;
+            // SAFETY: valid connected Unix socket fd and valid output pointers.
+            let rc = unsafe { libc::getpeereid(fd, &mut euid, &mut egid) };
+            if rc != 0 {
+                return Err(format!(
+                    "failed to query getpeereid on zygote socket: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if euid != expected_uid {
+                return Err(format!(
+                    "refusing zygote listener owned by uid {} (expected {})",
+                    euid, expected_uid
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn connect_verified(sock_path: &Path) -> Result<UnixStream, String> {
+        verify_owned_socket(sock_path)?;
+        let stream = UnixStream::connect(sock_path)
+            .map_err(|e| format!("failed to connect to {}: {e}", sock_path.display()))?;
+        verify_peer_same_uid(&stream)?;
+        Ok(stream)
+    }
+
+    fn connect_or_spawn_zygote(
+        program: &OsStr,
+        endpoint: &ZygoteEndpoint,
+        sandbox: &OracleSandbox,
+    ) -> Result<UnixStream, String> {
+        let sock_path = endpoint.path.as_path();
+        if let Ok(stream) = connect_verified(sock_path) {
+            return Ok(stream);
+        }
+
+        let lock_path = lock_path_for(sock_path);
+        let _lock = acquire_flock(&lock_path)?;
+
+        // Another parallel test process may have started the zygote while we
+        // waited on the lock.
+        if let Ok(stream) = connect_verified(sock_path) {
+            return Ok(stream);
+        }
+
+        // Only automatically reclaim a stale socket inside our private `0700`
+        // managed directory. For explicit `NEOVM_ORACLE_ZYGOTE_SOCK` paths in
+        // caller-chosen directories, leave any existing entry untouched and
+        // report an error so the caller falls back cleanly.
+        match fs::symlink_metadata(sock_path) {
+            Ok(_) => {
+                if !endpoint.managed_dir {
+                    return Err(format!(
+                        "refusing to reclaim existing explicit zygote path {}",
+                        sock_path.display()
+                    ));
+                }
+                verify_owned_socket(sock_path)?;
+                let _ = fs::remove_file(sock_path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to stat zygote socket {}: {err}",
+                    sock_path.display()
+                ));
+            }
+        }
+
+        let mut cmd = sandbox.pinned_command(program);
+        cmd.arg("--batch-zygote-socket").arg(sock_path);
+        // Never inherit test stdout/stderr pipes: nextest treats inherited open
+        // stdio pipes as a leaked-handle error.
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // Detach into a fresh session/process group so nextest's per-test
+        // process-group teardown does not kill the shared zygote.
+        cmd.detach_session();
+        // Clear any inherited `NEOMACS_LOG_FILE` so the zygote parent never
+        // starts a background tracing file-appender thread before `fork()`.
+        cmd.env_remove("NEOMACS_LOG_FILE");
+        if std::env::var_os("NEOMACS_ZYGOTE_WATCH_PID").is_none()
+            && let Some(watch_pid) = detect_nextest_watch_pid()
+        {
+            cmd.env("NEOMACS_ZYGOTE_WATCH_PID", watch_pid.to_string());
+        }
+        if std::env::var_os("NEOMACS_ZYGOTE_IDLE_SECS").is_none() {
+            cmd.env("NEOMACS_ZYGOTE_IDLE_SECS", "15");
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            format!(
+                "failed to spawn neomacs zygote {}: {e}",
+                Path::new(program).display()
+            )
+        })?;
+
+        let deadline = Instant::now() + STARTUP_WAIT_TIMEOUT;
+        while Instant::now() < deadline {
+            if let Ok(stream) = connect_verified(sock_path) {
+                return Ok(stream);
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                // Binary could not start a final-image zygote (e.g. a debug
+                // build without `neomacs.pdump`). Latch unavailability so the
+                // caller falls back transparently to `Command::output()`.
+                ZYGOTE_UNAVAILABLE.store(true, Ordering::Relaxed);
+                return Err(format!(
+                    "neomacs zygote exited early with {status} before publishing {}",
+                    sock_path.display()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        Err(format!(
+            "timed out waiting for neomacs zygote socket {}",
+            sock_path.display()
+        ))
+    }
+
+    fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+    }
+
+    fn encode_request(
+        cmd: &PinnedCommand,
+        cwd: &Path,
+        stdout_path: &Path,
+        stderr_path: &Path,
+        rlimit_as: Option<u64>,
+    ) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(4096);
+
+        let mut argv: Vec<&OsStr> = Vec::new();
+        argv.push(cmd.get_program());
+        argv.extend(cmd.get_args());
+        payload.extend_from_slice(&(argv.len() as u32).to_le_bytes());
+        for arg in argv {
+            push_bytes(&mut payload, arg.as_bytes());
+        }
+
+        // Build the exact effective environment `Command::spawn` would pass:
+        // inherited process env overlaid with explicit `env()` / `env_remove()`.
+        let mut env_map: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
+        for (key, value) in cmd.get_envs() {
+            match value {
+                Some(v) => {
+                    env_map.insert(key.to_os_string(), v.to_os_string());
+                }
+                None => {
+                    env_map.remove(key);
+                }
+            }
+        }
+        payload.extend_from_slice(&(env_map.len() as u32).to_le_bytes());
+        for (key, value) in &env_map {
+            push_bytes(&mut payload, key.as_bytes());
+            push_bytes(&mut payload, value.as_bytes());
+        }
+
+        push_bytes(&mut payload, cwd.as_os_str().as_bytes());
+        push_bytes(&mut payload, stdout_path.as_os_str().as_bytes());
+        push_bytes(&mut payload, stderr_path.as_os_str().as_bytes());
+        payload.extend_from_slice(&CANONICAL_UMASK.to_le_bytes());
+        payload.extend_from_slice(&rlimit_as.unwrap_or(0).to_le_bytes());
+        payload.extend_from_slice(&caller_ignored_signals_mask().to_le_bytes());
+
+        let mut frame = Vec::with_capacity(8 + payload.len());
+        frame.extend_from_slice(WIRE_MAGIC);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    fn decode_exit_status(resp: &[u8; 9]) -> Result<ExitStatus, String> {
+        if &resp[0..4] != WIRE_MAGIC {
+            return Err(format!("invalid zygote response magic: {:?}", &resp[0..4]));
+        }
+        let kind = resp[4];
+        let code = i32::from_le_bytes(resp[5..9].try_into().unwrap());
+        match kind {
+            RESP_EXITED => Ok(ExitStatus::from_raw((code & 0xff) << 8)),
+            RESP_SIGNALED => Ok(ExitStatus::from_raw(code & 0x7f)),
+            other => Err(format!("zygote server error (kind={other}, code={code})")),
+        }
+    }
+
+    fn round_trip(
+        stream: &mut UnixStream,
+        frame: &[u8],
+        timeout: Option<Duration>,
+    ) -> Result<ExitStatus, String> {
+        stream
+            .write_all(frame)
+            .map_err(|e| format!("failed to send request to neomacs zygote: {e}"))?;
+        let _ = stream.set_read_timeout(timeout);
+        let mut resp = [0u8; 9];
+        stream
+            .read_exact(&mut resp)
+            .map_err(|e| format!("failed to read response from neomacs zygote: {e}"))?;
+        decode_exit_status(&resp)
+    }
+
+    /// Snapshot which signals in `INHERITED_SIGNALS` currently have `SIG_IGN`
+    /// in the calling test process so the forked zygote child reproduces the
+    /// exact `execve()`-inherited signal dispositions regardless of which
+    /// earlier test spawned the daemon.
+    fn caller_ignored_signals_mask() -> u32 {
+        let mut mask = 0u32;
+        for (bit, &sig) in INHERITED_SIGNALS.iter().enumerate() {
+            // SAFETY: querying current signal disposition with null `act`.
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } == 0
+                && old.sa_sigaction == libc::SIG_IGN
+            {
+                mask |= 1u32 << bit;
+            }
+        }
+        mask
+    }
+
+    fn collect_captured_output(
+        status: ExitStatus,
+        stdout_path: &Path,
+        stderr_path: &Path,
+    ) -> Result<Output, String> {
+        let stdout = fs::read(stdout_path).map_err(|e| {
+            format!(
+                "failed to read zygote stdout capture {}: {e}",
+                stdout_path.display()
+            )
+        })?;
+        let stderr = fs::read(stderr_path).map_err(|e| {
+            format!(
+                "failed to read zygote stderr capture {}: {e}",
+                stderr_path.display()
+            )
+        })?;
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
+    pub(crate) fn try_run_neomacs_via_zygote(
+        cmd: &PinnedCommand,
+        sandbox: &OracleSandbox,
+        rlimit_as: Option<u64>,
+        timeout: Option<Duration>,
+    ) -> Option<Result<Output, String>> {
+        if !zygote_enabled() || !sandbox.extra_env_is_empty() {
+            return None;
+        }
+
+        let program = cmd.get_program();
+        let endpoint = match socket_endpoint_for(program) {
+            Ok(ep) => ep,
+            Err(_) => return None,
+        };
+        let cwd = match cmd.get_current_dir() {
+            Some(dir) => dir.to_path_buf(),
+            None => match std::env::current_dir() {
+                Ok(dir) => dir,
+                Err(e) => return Some(Err(format!("failed to determine cwd: {e}"))),
+            },
+        };
+
+        // Establish connection before creating per-request files. If the
+        // zygote daemon cannot start (e.g. a debug binary without a final
+        // pdump, or untrusted socket dir), return `None` so the caller falls
+        // back transparently to `cmd.output()`.
+        let mut stream = match connect_or_spawn_zygote(program, &endpoint, sandbox) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+
+        // Store stdout/stderr capture files in a separate private `0700` temp
+        // directory outside `sandbox.case_root_path()` so forms whose
+        // `default-directory` is the case root never observe extra capture
+        // files that direct pipe execution would not create.
+        let capture_dir = match bounded_temp_dir("nvz-io-") {
+            Ok(dir) => dir,
+            Err(_) => return None,
+        };
+        let stdout_path = capture_dir.path().join("stdout");
+        let stderr_path = capture_dir.path().join("stderr");
+        let frame = encode_request(cmd, &cwd, &stdout_path, &stderr_path, rlimit_as);
+
+        // Do not retry once the request is dispatched: the server may already
+        // have forked and started side-effecting evaluation.
+        let result = round_trip(&mut stream, &frame, timeout)
+            .and_then(|status| collect_captured_output(status, &stdout_path, &stderr_path));
+        drop(capture_dir);
+        Some(result)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::thread;
+
+        fn run_direct_on_socket(
+            sock_path: &Path,
+            program: &Path,
+            cwd: &Path,
+            io_dir: &Path,
+            tag: &str,
+            extra_env: &[(&str, &str)],
+            eval_form: &str,
+        ) -> Output {
+            let mut cmd = neomacs_test_env::CanonicalEnvironment::new(
+                neomacs_test_env::CanonicalProfile::Oracle,
+                io_dir,
+                io_dir,
+                io_dir,
+            )
+            .expect("canonical env")
+            .command(program);
+            cmd.current_dir(cwd);
+            for (k, v) in extra_env {
+                cmd.env(k, v);
+            }
+            cmd.args(["--batch", "-Q", "--eval", eval_form]);
+
+            let stdout_path = io_dir.join(format!("{tag}.stdout"));
+            let stderr_path = io_dir.join(format!("{tag}.stderr"));
+            let frame = encode_request(&cmd, cwd, &stdout_path, &stderr_path, None);
+            let mut stream = UnixStream::connect(sock_path).expect("connect to private zygote");
+            let status =
+                round_trip(&mut stream, &frame, Some(Duration::from_secs(15))).expect("round trip");
+            let stdout = fs::read(&stdout_path).unwrap_or_default();
+            let stderr = fs::read(&stderr_path).unwrap_or_default();
+            Output {
+                status,
+                stdout,
+                stderr,
+            }
+        }
+
+        fn spawn_private_zygote(
+            program: &Path,
+            sock_path: &Path,
+            work_dir: &Path,
+        ) -> std::process::Child {
+            let environment = neomacs_test_env::CanonicalEnvironment::new(
+                neomacs_test_env::CanonicalProfile::Oracle,
+                work_dir,
+                work_dir,
+                work_dir,
+            )
+            .expect("canonical env");
+            let mut cmd = environment.command(program);
+            cmd.arg("--batch-zygote-socket").arg(sock_path);
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd.env_remove("NEOMACS_LOG_FILE");
+            cmd.env("NEOMACS_ZYGOTE_IDLE_SECS", "10");
+            let child = cmd.spawn().expect("spawn private zygote");
+            let deadline = Instant::now() + STARTUP_WAIT_TIMEOUT;
+            while Instant::now() < deadline {
+                if sock_path.exists() {
+                    return child;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            panic!("private zygote did not publish {}", sock_path.display());
+        }
+
+        #[test]
+        fn decode_exit_status_handles_exit_signal_and_errors() {
+            let mut exited = [0u8; 9];
+            exited[0..4].copy_from_slice(WIRE_MAGIC);
+            exited[4] = RESP_EXITED;
+            exited[5..9].copy_from_slice(&42i32.to_le_bytes());
+            assert_eq!(decode_exit_status(&exited).unwrap().code(), Some(42));
+
+            let mut signaled = [0u8; 9];
+            signaled[0..4].copy_from_slice(WIRE_MAGIC);
+            signaled[4] = RESP_SIGNALED;
+            signaled[5..9].copy_from_slice(&libc::SIGKILL.to_le_bytes());
+            assert_eq!(
+                std::os::unix::process::ExitStatusExt::signal(
+                    &decode_exit_status(&signaled).unwrap()
+                ),
+                Some(libc::SIGKILL)
+            );
+
+            let mut bad_magic = [0u8; 9];
+            bad_magic[0..4].copy_from_slice(b"XXXX");
+            assert!(decode_exit_status(&bad_magic).is_err());
+        }
+
+        #[test]
+        fn zygote_isolates_lisp_state_env_cwd_stdio_and_exit_code() {
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = neomacs_test_env::bounded_temp_dir("nvz-iso-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let cwd_a = dir.path().join("cwd-a");
+            let cwd_b = dir.path().join("cwd-b");
+            fs::create_dir_all(&cwd_a).unwrap();
+            fs::create_dir_all(&cwd_b).unwrap();
+
+            let mut server = spawn_private_zygote(&program, &sock, dir.path());
+
+            // Request 1 mutates obarray, creates a buffer, writes stdout+stderr.
+            let out1 = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_a,
+                dir.path(),
+                "req1",
+                &[("NEOVM_ZYGOTE_TEST_TAG", "alpha")],
+                r#"(progn
+                     (defvar neovm--zygote-leak 'dirty)
+                     (fset 'neovm--zygote-fn (lambda () 'dirty))
+                     (get-buffer-create "*zygote-leak*")
+                     (princ (format "%d:%s" (emacs-pid) (getenv "NEOVM_ZYGOTE_TEST_TAG")))
+                     (princ "STDERR-ALPHA" 'external-debugging-output))"#,
+            );
+            assert!(out1.status.success(), "req1 failed: {out1:?}");
+            let s1 = String::from_utf8_lossy(&out1.stdout);
+            assert!(s1.ends_with(":alpha"), "unexpected stdout1: {s1:?}");
+            assert!(
+                String::from_utf8_lossy(&out1.stderr).contains("STDERR-ALPHA"),
+                "missing stderr1: {:?}",
+                String::from_utf8_lossy(&out1.stderr)
+            );
+            let pid1: i64 = s1.split(':').next().unwrap().parse().unwrap();
+
+            // Request 2 on the SAME zygote must see zero leaked state and its own env/cwd/pid.
+            let out2 = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_b,
+                dir.path(),
+                "req2",
+                &[("NEOVM_ZYGOTE_TEST_TAG", "beta")],
+                r#"(princ (format "%S"
+                     (list (boundp 'neovm--zygote-leak)
+                           (fboundp 'neovm--zygote-fn)
+                           (not (null (get-buffer "*zygote-leak*")))
+                           (emacs-pid)
+                           (getenv "NEOVM_ZYGOTE_TEST_TAG")
+                           (file-name-nondirectory (directory-file-name default-directory)))))"#,
+            );
+            assert!(out2.status.success(), "req2 failed: {out2:?}");
+            let s2 = String::from_utf8_lossy(&out2.stdout);
+            assert!(
+                s2.starts_with("(nil nil nil ") && s2.ends_with(" \"beta\" \"cwd-b\")"),
+                "state leaked or env/cwd mismatch: {s2:?}"
+            );
+            assert!(
+                !String::from_utf8_lossy(&out2.stderr).contains("STDERR-ALPHA"),
+                "stderr leaked into req2"
+            );
+            let pid2: i64 = s2.split_whitespace().nth(3).unwrap().parse().unwrap();
+            assert_ne!(pid1, pid2, "forked children must have distinct PIDs");
+
+            // Non-zero exit code via `kill-emacs` must propagate verbatim.
+            let out3 = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_a,
+                dir.path(),
+                "req3",
+                &[],
+                "(kill-emacs 42)",
+            );
+            assert_eq!(out3.status.code(), Some(42));
+
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+
+        #[test]
+        fn zygote_concurrent_sleep_for_children_do_not_share_poller() {
+            // Regression test: before deferring `ProcessManager::new()` until
+            // post-image activation, forked children inherited one shared
+            // `epoll`/`timerfd`/`kqueue` and deadlocked when sleeping together.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = neomacs_test_env::bounded_temp_dir("nvz-slp-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+
+            let mut server = spawn_private_zygote(&program, &sock, dir.path());
+
+            let t0 = Instant::now();
+            let handles: Vec<_> = (0..4)
+                .map(|i| {
+                    let sock = sock.clone();
+                    let program = program.clone();
+                    let work = dir.path().to_path_buf();
+                    thread::spawn(move || {
+                        run_direct_on_socket(
+                            &sock,
+                            &program,
+                            &work,
+                            &work,
+                            &format!("sleep-{i}"),
+                            &[],
+                            "(progn (sleep-for 0.15) (princ \"DONE\"))",
+                        )
+                    })
+                })
+                .collect();
+
+            for (i, handle) in handles.into_iter().enumerate() {
+                let out = handle.join().expect("worker thread panicked");
+                assert!(out.status.success(), "sleep worker {i} failed: {out:?}");
+                assert_eq!(String::from_utf8_lossy(&out.stdout), "DONE");
+            }
+            assert!(
+                t0.elapsed() < Duration::from_secs(5),
+                "concurrent sleep-for children took too long: {:?}",
+                t0.elapsed()
+            );
+
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+
+        #[test]
+        fn zygote_stalled_partial_client_does_not_block_other_requests() {
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = neomacs_test_env::bounded_temp_dir("nvz-stl-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+
+            let mut server = spawn_private_zygote(&program, &sock, dir.path());
+
+            // Open a stalled client that sends only 4 bytes of an 8-byte header
+            // and never finishes.
+            let mut stalled = UnixStream::connect(&sock).expect("connect stalled");
+            stalled.write_all(WIRE_MAGIC).expect("write partial header");
+
+            // Another client must still complete quickly without waiting on the
+            // stalled client's 5-second read deadline.
+            let t0 = Instant::now();
+            let out = run_direct_on_socket(
+                &sock,
+                &program,
+                dir.path(),
+                dir.path(),
+                "fast",
+                &[],
+                "(princ \"FAST-OK\")",
+            );
+            assert!(out.status.success(), "fast req failed: {out:?}");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "FAST-OK");
+            assert!(
+                t0.elapsed() < Duration::from_secs(3),
+                "fast request was blocked by stalled client: {:?}",
+                t0.elapsed()
+            );
+
+            drop(stalled);
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+
+        #[test]
+        fn private_socket_dir_is_owner_only_0700() {
+            let dir = ensure_private_socket_dir().expect("create private socket dir");
+            let meta = fs::symlink_metadata(&dir).expect("stat dir");
+            assert!(meta.is_dir());
+            assert!(!meta.file_type().is_symlink());
+            assert_eq!(meta.mode() & 0o077, 0);
+        }
+
+        #[test]
+        fn verify_owned_socket_rejects_regular_file_and_preserves_it() {
+            let dir = neomacs_test_env::bounded_temp_dir("nvz-reg-").expect("tempdir");
+            let regular = dir.path().join("not-a-socket.txt");
+            fs::write(&regular, b"preserve-me").unwrap();
+            assert!(verify_owned_socket(&regular).is_err());
+
+            // Attempting to connect/spawn at a regular file must fail without
+            // deleting or clobbering the file (for both managed and explicit endpoints).
+            let sandbox = OracleSandbox::new("(princ \"ok\")", &[], dir.path()).expect("sandbox");
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            for managed_dir in [false, true] {
+                let ep = ZygoteEndpoint {
+                    path: regular.clone(),
+                    managed_dir,
+                };
+                let err = connect_or_spawn_zygote(program.as_os_str(), &ep, &sandbox);
+                assert!(err.is_err(), "expected non-socket target to be rejected");
+                assert_eq!(fs::read(&regular).unwrap(), b"preserve-me");
+            }
+        }
+
+        #[test]
+        fn lock_path_for_never_collides_with_socket_path() {
+            assert_eq!(
+                lock_path_for(Path::new("/tmp/nvz/abc.sock")),
+                PathBuf::from("/tmp/nvz/abc.sock.lock")
+            );
+            assert_eq!(
+                lock_path_for(Path::new("/tmp/nvz/oracle.lock")),
+                PathBuf::from("/tmp/nvz/oracle.lock.lock")
+            );
+            assert_eq!(
+                lock_path_for(Path::new("/tmp/nvz/noext")),
+                PathBuf::from("/tmp/nvz/noext.lock")
+            );
+        }
+
+        #[test]
+        fn verify_peer_same_uid_accepts_same_user_socketpair() {
+            let (a, _b) = UnixStream::pair().expect("socketpair");
+            verify_peer_same_uid(&a).expect("same-user peer should be accepted");
+        }
+
+        #[test]
+        fn collect_captured_output_allows_empty_and_propagates_read_errors() {
+            let dir = bounded_temp_dir("nvz-cap-").expect("tempdir");
+            let stdout_path = dir.path().join("stdout");
+            let stderr_path = dir.path().join("stderr");
+            let status = ExitStatus::from_raw(0);
+
+            // Missing capture files must return Err rather than silently
+            // synthesizing empty output.
+            assert!(collect_captured_output(status, &stdout_path, &stderr_path).is_err());
+
+            fs::write(&stdout_path, b"").unwrap();
+            assert!(collect_captured_output(status, &stdout_path, &stderr_path).is_err());
+
+            // Genuine empty capture files succeed.
+            fs::write(&stderr_path, b"").unwrap();
+            let out = collect_captured_output(status, &stdout_path, &stderr_path)
+                .expect("empty capture files should succeed");
+            assert!(out.stdout.is_empty());
+            assert!(out.stderr.is_empty());
+        }
+
+        #[test]
+        fn zygote_capture_files_do_not_appear_in_case_working_directory() {
+            // Regression test: when a sandbox runs with `cwd == case_root`,
+            // listing `default-directory` under the zygote must not reveal any
+            // capture files (matching direct pipe execution).
+            let dir = bounded_temp_dir("nvz-cwd-").expect("tempdir");
+            let form =
+                r#"(princ (format "%S" (sort (directory-files default-directory) #'string<)))"#;
+            let sandbox = OracleSandbox::new(form, &[], dir.path()).expect("sandbox");
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+
+            let mut cmd = sandbox.pinned_command(&program);
+            cmd.current_dir(sandbox.case_root_path());
+            cmd.args(["--batch", "-Q", "--eval", form]);
+
+            // Compare direct pipe execution against zygote execution in the
+            // exact same case working directory.
+            let direct = cmd.output().expect("direct output");
+            assert!(direct.status.success(), "direct run failed: {direct:?}");
+
+            if zygote_enabled() {
+                let zygote_out =
+                    try_run_neomacs_via_zygote(&cmd, &sandbox, None, Some(Duration::from_secs(15)))
+                        .expect("expected zygote execution when zygote is enabled")
+                        .expect("zygote run");
+                assert!(
+                    zygote_out.status.success(),
+                    "zygote run failed: {zygote_out:?}"
+                );
+                assert_eq!(
+                    String::from_utf8_lossy(&zygote_out.stdout),
+                    String::from_utf8_lossy(&direct.stdout),
+                    "zygote leaked capture files into case working directory"
+                );
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn zygote_propagates_caller_sigttou_disposition_without_test_order_leak() {
+            // Regression test: verify that ONE shared zygote daemon faithfully
+            // propagates the caller's SIGTTOU disposition (SIG_DFL vs SIG_IGN)
+            // per request regardless of the daemon's own inherited disposition.
+            struct SigRestore(libc::c_int, libc::sigaction);
+            impl Drop for SigRestore {
+                fn drop(&mut self) {
+                    // SAFETY: restoring previously queried `sigaction`.
+                    unsafe {
+                        libc::sigaction(self.0, &self.1, std::ptr::null_mut());
+                    }
+                }
+            }
+            let set_sig = |sig: libc::c_int, disp: usize| -> SigRestore {
+                // SAFETY: querying and setting a standard catchable signal.
+                let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+                let mut act: libc::sigaction = unsafe { std::mem::zeroed() };
+                act.sa_sigaction = disp;
+                assert_eq!(unsafe { libc::sigemptyset(&mut act.sa_mask) }, 0);
+                assert_eq!(unsafe { libc::sigaction(sig, &act, &mut old) }, 0);
+                SigRestore(sig, old)
+            };
+
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-sig-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let mut server = spawn_private_zygote(&program, &sock, dir.path());
+
+            let form = r#"(with-temp-buffer
+                (insert-file-contents "/proc/self/status")
+                (re-search-forward "^SigIgn:[ \t]+\\([0-9a-fA-F]+\\)")
+                (princ (match-string 1)))"#;
+            let ttou_bit = 1u64 << ((libc::SIGTTOU - 1) as u32);
+
+            let read_sigign = |tag: &str| -> u64 {
+                let out =
+                    run_direct_on_socket(&sock, &program, dir.path(), dir.path(), tag, &[], form);
+                assert!(out.status.success(), "{tag} failed: {out:?}");
+                let hex = String::from_utf8_lossy(&out.stdout);
+                u64::from_str_radix(hex.trim(), 16)
+                    .unwrap_or_else(|e| panic!("invalid SigIgn {hex:?}: {e}"))
+            };
+
+            let _orig = set_sig(libc::SIGTTOU, libc::SIG_DFL);
+            assert_eq!(
+                read_sigign("dfl1") & ttou_bit,
+                0,
+                "expected SIGTTOU=SIG_DFL in child"
+            );
+
+            let _ign = set_sig(libc::SIGTTOU, libc::SIG_IGN);
+            assert_ne!(
+                read_sigign("ign") & ttou_bit,
+                0,
+                "expected SIGTTOU=SIG_IGN in child"
+            );
+
+            drop(_ign);
+            assert_eq!(
+                read_sigign("dfl2") & ttou_bit,
+                0,
+                "expected SIGTTOU restored to SIG_DFL in child"
+            );
+
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+    }
+}

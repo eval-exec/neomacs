@@ -2896,6 +2896,24 @@ const STALE_READINESS_PAUSE: Duration = Duration::from_millis(15);
 static BACKEND_POLL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl ProcessWaitBackend {
+    /// Construct an empty wait backend without opening any OS poller or signal
+    /// descriptors. Used by `load_unactivated_runtime_image` before a zygote
+    /// `fork()` so forked children never share kernel epoll/timerfd/kqueue/pipe
+    /// state; each child initializes its own backend via
+    /// [`ProcessManager::ensure_wait_backend`] during post-image activation.
+    pub(crate) fn new_deferred() -> Self {
+        Self {
+            poller: None,
+            #[cfg(any(test, feature = "test-support"))]
+            before_next_wait: std::sync::Mutex::new(None),
+            #[cfg(any(test, feature = "test-support"))]
+            native_connect_observer: NativeConnectObservationSlot::default(),
+            #[cfg(unix)]
+            signal_fd: None,
+            notification_pending: Arc::new(NotificationLatch::new()),
+        }
+    }
+
     pub fn new() -> Self {
         // Miri implements no `timerfd_create`, which `polling::Poller::new`
         // uses on Linux. The backend already tolerates a missing poller (its
@@ -3663,6 +3681,16 @@ impl ProcessManager {
 
 impl ProcessManager {
     pub fn new() -> Self {
+        Self::with_wait_backend(ProcessWaitBackend::new())
+    }
+
+    /// Construct a `ProcessManager` whose OS wait backend (`polling::Poller` +
+    /// signal wake pipe registration) is deferred until [`Self::ensure_wait_backend`].
+    pub(crate) fn new_deferred() -> Self {
+        Self::with_wait_backend(ProcessWaitBackend::new_deferred())
+    }
+
+    fn with_wait_backend(wait_backend: ProcessWaitBackend) -> Self {
         Self {
             processes: FxHashMap::default(),
             deleted_processes: FxHashMap::default(),
@@ -3679,7 +3707,14 @@ impl ProcessManager {
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
             env_overrides: HashMap::new(),
-            wait_backend: ProcessWaitBackend::new(),
+            wait_backend,
+        }
+    }
+
+    /// Materialize the OS wait backend if it was deferred before a zygote `fork()`.
+    pub(crate) fn ensure_wait_backend(&mut self) {
+        if self.wait_backend.poller.is_none() {
+            self.wait_backend = ProcessWaitBackend::new();
         }
     }
 

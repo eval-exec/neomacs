@@ -301,6 +301,14 @@ impl OracleSandbox {
         }
     }
 
+    pub(crate) fn extra_env_is_empty(&self) -> bool {
+        self.extra_env.is_empty()
+    }
+
+    pub(crate) fn case_root_path(&self) -> &Path {
+        self.case_root.path()
+    }
+
     /// Absolute directory prefixes this case may print. Longest first, so a
     /// nested root is replaced before the directory that contains it.
     pub(crate) fn stderr_path_roots(&self) -> Vec<String> {
