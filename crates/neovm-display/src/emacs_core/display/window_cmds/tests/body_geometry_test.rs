@@ -99,14 +99,18 @@ fn matrix_adjustment_uses_committed_body_instead_of_previous_presented_regions()
         old_body as f32,
         "the fixture must retain the old completed body rectangle"
     );
+    // #873: GNU's `Fwindow_body_height` calls `window_box_height`
+    // (src/xdisp.c:1307-1370), which subtracts live `WINDOW_HEADER_LINE_HEIGHT`
+    // immediately even while the previous presentation's `text_body` rectangle
+    // remains cached until the next redisplay.
     assert_eq!(
         crate::emacs_core::window_cmds::builtin_window_body_height(
             &mut ctx,
             &[Value::make_window(window_id.0), Value::T]
         )
         .unwrap(),
-        Value::fixnum(old_body),
-        "the ordinary query must still prefer the completed presentation"
+        Value::fixnum(current_body),
+        "window-body-height must reflect newly requested chrome before redisplay"
     );
     let (_, adjustment_body) = crate::emacs_core::window_cmds::hook_window_body_dimensions(
         ctx.frame_manager(),

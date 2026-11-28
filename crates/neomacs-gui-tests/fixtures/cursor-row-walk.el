@@ -89,6 +89,13 @@
     (mid-one-char-doom one-char (display-line-numbers-mode hl-line-mode
                                                            neo-row-walk-tall-mode-line)
                        middle)
+    ;; #873: setting header-line-format and a 1.4 mode line before recenter
+    ;; without an intervening redisplay must count the header line immediately
+    ;; and land on GNU's window-start row.
+    (mid-one-char-reporter one-char (neo-row-walk-header-line
+                                     display-line-numbers-mode hl-line-mode
+                                     neo-row-walk-tall-mode-line)
+                           middle)
     (mid-one-space-trailing one-space (neo-row-walk-trailing-whitespace) middle)
     (mid-one-space-doom one-space (neo-row-walk-trailing-whitespace
                                    display-line-numbers-mode hl-line-mode

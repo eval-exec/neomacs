@@ -5940,6 +5940,12 @@ fn window_body_pixel_edges_begin_below_rendered_header_and_tab_lines() {
     let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
 
+    // Rendered regions measure requested chrome (GNU WINDOW_*_LINE_HEIGHT
+    // predicates require non-nil buffer formats for header/tab lines).
+    let buffer = ev.edit.buffers.get_mut(buf).expect("buffer");
+    buffer.set_buffer_local("header-line-format", Value::string("HEADER"));
+    buffer.set_buffer_local("tab-line-format", Value::string("TAB"));
+
     {
         let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
@@ -6742,4 +6748,163 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
         .expect("frame")
         .selected_window;
     assert!(wlpd(&mut fresh, vec![Value::make_window(wid.0)]).is_nil());
+}
+
+/// #873: GNU's `WINDOW_HEADER_LINE_HEIGHT` / `WINDOW_MODE_LINE_HEIGHT` /
+/// `WINDOW_TAB_LINE_HEIGHT` (window.h:1020-1043) and `window_box_height`
+/// (xdisp.c:1307-1370) check live `window_wants_*_line` before reading the
+/// last redisplay's chrome height. Setting or clearing a chrome format after
+/// a materialized presentation must update chrome and body heights before the
+/// next redisplay.
+#[test]
+fn window_chrome_and_body_heights_reflect_live_format_changes_before_redisplay() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 612, buf);
+    let wid = ev.frame_manager().get(fid).expect("frame").selected_window;
+
+    {
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_height = 17.0;
+        frame
+            .find_window_mut(wid)
+            .expect("leaf")
+            .bounds_mut()
+            .height = 595.0;
+        frame
+            .prepare_and_activate_display_presentation_for_test(
+                crate::window::geometry::PresentationId::new(1),
+                vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
+                    window_id: wid,
+                    regions: crate::window::PresentedWindowRegions {
+                        outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 595.0),
+                        text_body: neomacs_display_protocol::types::Rect::new(
+                            0.0, 0.0, 800.0, 578.0,
+                        ),
+                        mode_line: Some(neomacs_display_protocol::types::Rect::new(
+                            0.0, 578.0, 800.0, 17.0,
+                        )),
+                        ..Default::default()
+                    },
+                    regions_materialized: true,
+                    mode_line_height: 17,
+                    ..crate::window::WindowDisplaySnapshot::default()
+                }],
+            )
+            .expect("presented geometry");
+    }
+
+    assert_eq!(
+        super::builtin_window_mode_line_height(&mut ev, vec![]).expect("baseline mode-line"),
+        Value::fixnum(17)
+    );
+    assert_eq!(
+        super::builtin_window_header_line_height(&mut ev, &vec![]).expect("baseline header-line"),
+        Value::fixnum(0)
+    );
+    assert_eq!(
+        super::builtin_window_body_height(&mut ev, &[Value::NIL, Value::T])
+            .expect("baseline body px"),
+        Value::fixnum(578)
+    );
+
+    // Adding a header line before redisplay estimates its height using
+    // frame.char_height (17) and reduces body/text height immediately.
+    ev.edit
+        .buffers
+        .get_mut(buf)
+        .expect("buffer")
+        .set_buffer_local("header-line-format", Value::string("cursor row walk"));
+    assert_eq!(
+        super::builtin_window_header_line_height(&mut ev, &vec![])
+            .expect("header-line before redisplay"),
+        Value::fixnum(17)
+    );
+    assert_eq!(
+        super::builtin_window_mode_line_height(&mut ev, vec![])
+            .expect("mode-line before redisplay"),
+        Value::fixnum(17)
+    );
+    assert_eq!(
+        super::builtin_window_body_height(&mut ev, &[Value::NIL, Value::T])
+            .expect("body px before redisplay"),
+        Value::fixnum(561)
+    );
+    assert_eq!(
+        super::builtin_window_body_height(&mut ev, &[]).expect("body lines before redisplay"),
+        Value::fixnum(33)
+    );
+    assert_eq!(
+        super::builtin_window_text_height(&mut ev, vec![Value::NIL, Value::T])
+            .expect("text px before redisplay"),
+        Value::fixnum(561)
+    );
+
+    // Clearing mode-line-format before redisplay drops its height to 0
+    // immediately even though the last presentation rendered a mode line.
+    ev.edit
+        .buffers
+        .get_mut(buf)
+        .expect("buffer")
+        .set_buffer_local("mode-line-format", Value::NIL);
+    assert_eq!(
+        super::builtin_window_mode_line_height(&mut ev, vec![])
+            .expect("cleared mode-line before redisplay"),
+        Value::fixnum(0)
+    );
+    assert_eq!(
+        super::builtin_window_body_height(&mut ev, &[Value::NIL, Value::T])
+            .expect("body px after clearing mode-line"),
+        Value::fixnum(578)
+    );
+
+    // With a taller published mode line (23 px), adding a header line before
+    // redisplay keeps the published 23 px mode line and adds 17 px header line.
+    ev.edit
+        .buffers
+        .get_mut(buf)
+        .expect("buffer")
+        .set_buffer_local("mode-line-format", Value::string("MODE"));
+    {
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
+        frame
+            .prepare_and_activate_display_presentation_for_test(
+                crate::window::geometry::PresentationId::new(2),
+                vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
+                    window_id: wid,
+                    regions: crate::window::PresentedWindowRegions {
+                        outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 595.0),
+                        text_body: neomacs_display_protocol::types::Rect::new(
+                            0.0, 0.0, 800.0, 572.0,
+                        ),
+                        mode_line: Some(neomacs_display_protocol::types::Rect::new(
+                            0.0, 572.0, 800.0, 23.0,
+                        )),
+                        ..Default::default()
+                    },
+                    regions_materialized: true,
+                    mode_line_height: 23,
+                    ..crate::window::WindowDisplaySnapshot::default()
+                }],
+            )
+            .expect("presented tall mode-line");
+    }
+    assert_eq!(
+        super::builtin_window_mode_line_height(&mut ev, vec![]).expect("tall mode-line"),
+        Value::fixnum(23)
+    );
+    assert_eq!(
+        super::builtin_window_header_line_height(&mut ev, &vec![]).expect("estimated header-line"),
+        Value::fixnum(17)
+    );
+    assert_eq!(
+        super::builtin_window_body_height(&mut ev, &[Value::NIL, Value::T])
+            .expect("body px with tall mode-line and new header-line"),
+        Value::fixnum(555)
+    );
 }

@@ -48,7 +48,15 @@ fn scaled_buffer_synthetic_glyphs_have_their_own_realized_default_face() {
         .faces
         .get(&marker.face_id)
         .expect("published marker face");
-    assert!((marker_face.font_size - default.font_size * 0.75).abs() < 0.001);
+    // #873: GNU `merge_face_heights` merges `:height 0.75` against the
+    // default face's tenths-of-a-point height before `POINT_TO_PIXEL`
+    // conversion, rather than multiplying the rounded pixel `font_size`.
+    let font_sizing = crate::font::sizing::FontSizing::native_gui();
+    let default_tenths =
+        font_sizing.face_height_tenths_for_layout_pixels(default.font_size.round() as u32);
+    let expected_size =
+        font_sizing.face_height_to_layout_pixels((0.75 * default_tenths as f64) as i32);
+    assert_eq!(marker_face.font_size, expected_size);
 }
 
 #[test]
@@ -110,12 +118,17 @@ fn hscroll_faces_remain_distinct_across_scaled_and_unscaled_windows() {
             state.faces[&side_marker.face_id].font_size,
             state.faces[&side_body.face_id].font_size
         );
-        assert!(
-            (state.faces[&side_marker.face_id].font_size
-                / state.faces[&main_marker.face_id].font_size
-                - 0.7607258)
-                .abs()
-                < 0.001
+        // #873: GNU `merge_face_heights` merges the relative scale in tenths
+        // of a point before `POINT_TO_PIXEL` conversion.
+        let font_sizing = crate::font::sizing::FontSizing::native_gui();
+        let main_tenths = font_sizing.face_height_tenths_for_layout_pixels(
+            state.faces[&main_marker.face_id].font_size.round() as u32,
+        );
+        let expected_side_size = font_sizing
+            .face_height_to_layout_pixels((0.7607257743127308 * main_tenths as f64) as i32);
+        assert_eq!(
+            state.faces[&side_marker.face_id].font_size,
+            expected_side_size
         );
         activate_last_engine_presentation(&mut eval, &engine, frame_id);
     }

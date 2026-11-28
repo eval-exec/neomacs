@@ -4857,3 +4857,74 @@ fn face_resolver_applies_distant_foreground_below_gnu_threshold() {
     assert_eq!(resolver.resolve_named_face("near-distant").fg, 0x001B2229);
     assert_eq!(resolver.resolve_named_face("far-distant").fg, 0x004078F2);
 }
+
+/// #873: GNU's `merge_face_heights` (src/xfaces.c:2253-2270) multiplies a
+/// float `:height` against the inherited height in tenths of a point and
+/// truncates to an integer before `POINT_TO_PIXEL` converts to pixels.
+/// At 99.5 DPI with default `:height 101` (opened as 14 px), a 1.4 mode line
+/// merges to `trunc(101 * 1.4) = 141` tenths -> `19 px` (height 23 px), not
+/// `round(14 * 1.4) = 20 px` (height 24 px).
+#[test]
+fn graphic_relative_face_height_merges_in_tenths_of_a_point_like_gnu() {
+    let _evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut table = FaceTable::new();
+    let mut default = NeoFace::new("default");
+    default.height = Some(FaceHeight::Absolute(101));
+    table.define("default", default);
+
+    let mut mode_line = NeoFace::new("mode-line");
+    mode_line.height = Some(FaceHeight::Relative(1.4));
+    table.define("mode-line", mode_line);
+
+    let mut header_line = NeoFace::new("header-line");
+    header_line.inherit = Some(Value::symbol("mode-line"));
+    table.define("header-line", header_line);
+
+    let mut nested = NeoFace::new("nested-relative");
+    nested.inherit = Some(Value::symbol("mode-line"));
+    nested.height = Some(FaceHeight::Relative(1.2));
+    table.define("nested-relative", nested);
+
+    let mut resolver = FaceResolver::new_with_font_sizing(
+        &table,
+        0x00FFFFFF,
+        0x00000000,
+        14.0,
+        Some("x".into()),
+        crate::font::sizing::FontSizing::for_layout_dpi(99.5265),
+    );
+    resolver.retain_opened_default_font_size(
+        crate::font::frame_metrics::GraphicFontSizePx::new(14.0).unwrap(),
+    );
+
+    assert_eq!(resolver.default_face().font_size, 14.0);
+    assert_eq!(resolver.resolve_named_face("mode-line").font_size, 19.0);
+    assert_eq!(resolver.resolve_named_face("header-line").font_size, 19.0);
+    // trunc(141 * 1.2) = 169 tenths -> round(16.9 * 99.5265 / 72.27) = 23 px.
+    assert_eq!(
+        resolver.resolve_named_face("nested-relative").font_size,
+        23.0
+    );
+
+    // Same contract at 99.0 DPI with default :height 102:
+    // trunc(102 * 1.4) = 142 tenths -> round(14.2 * 99.0 / 72.27) = 19 px.
+    let mut table_99 = FaceTable::new();
+    let mut default_99 = NeoFace::new("default");
+    default_99.height = Some(FaceHeight::Absolute(102));
+    table_99.define("default", default_99);
+    let mut ml_99 = NeoFace::new("mode-line");
+    ml_99.height = Some(FaceHeight::Relative(1.4));
+    table_99.define("mode-line", ml_99);
+    let mut resolver_99 = FaceResolver::new_with_font_sizing(
+        &table_99,
+        0x00FFFFFF,
+        0x00000000,
+        14.0,
+        Some("x".into()),
+        crate::font::sizing::FontSizing::for_layout_dpi(99.0),
+    );
+    resolver_99.retain_opened_default_font_size(
+        crate::font::frame_metrics::GraphicFontSizePx::new(14.0).unwrap(),
+    );
+    assert_eq!(resolver_99.resolve_named_face("mode-line").font_size, 19.0);
+}

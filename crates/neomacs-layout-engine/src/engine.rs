@@ -2221,6 +2221,12 @@ impl LayoutEngine {
             window_system,
             font_sizing,
         );
+        if resolver.is_window_system()
+            && let Some(opened) =
+                crate::font::frame_metrics::GraphicFontSizePx::new(bootstrap.font_pixel_size)
+        {
+            resolver.retain_opened_default_font_size(opened);
+        }
         self.bind_face_composed_sources(&mut resolver);
         self.prepare_face_resolver_tty(&mut resolver, frame_id, evaluator);
         resolver.set_current_window_parameters(

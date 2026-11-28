@@ -2309,3 +2309,41 @@ fn recenter_long_line_work_does_not_grow_with_the_line() {
         "recenter must bound its work by window lines: {work:?}"
     );
 }
+
+/// #873: GNU's `Frecenter` (window.c:7309) centers via
+/// `move_it_vertically_backward (&it, window_box_height (w) / 2)`, which only
+/// steps back another row when the remaining shortfall exceeds
+/// `min(window_box_height(w), line_height * 2 / 3)` (xdisp.c:11386-11393).
+#[test]
+fn graphical_center_recenter_honors_gnu_two_thirds_line_height_threshold() {
+    // 17 px rows -> 2/3 threshold is 11 px. Point is on line 50.
+    // - 561 px (dy = 280, 16*17 = 272, shortfall 8 <= 11): 16 rows above -> line 34
+    // - 549 px (dy = 274, 16*17 = 272, shortfall 2 <= 11): 16 rows above -> line 34
+    // - 567 px (dy = 283, 16*17 = 272, shortfall 11 <= 11): boundary -> line 34
+    // - 568 px (dy = 284, 16*17 = 272, shortfall 12 > 11): 17 rows above -> line 33
+    // - 570 px (dy = 285, 16*17 = 272, shortfall 13 > 11): 17 rows above -> line 33
+    for (row_height, body_height, expected_start_line) in [
+        (17, 561, 34),
+        (17, 549, 34),
+        (17, 567, 34),
+        (17, 568, 33),
+        (17, 570, 33),
+        // GNU's own comment example (src/xdisp.c:11387-11390):
+        // 3 lines of 13 px (body = 39, dy = 19, shortfall = 6 <= 8) -> 1 row above.
+        (13, 39, 49),
+    ] {
+        let mut eval = graphical_recenter_context(row_height, 0, body_height, None);
+        eval.frame_manager_mut()
+            .selected_frame_mut()
+            .expect("frame")
+            .char_height = row_height as f32;
+        let result = eval
+            .eval_str("(progn (recenter) (line-number-at-pos (window-start)))")
+            .expect("graphical center recenter");
+        assert_eq!(
+            result,
+            Value::fixnum(expected_start_line),
+            "row_height={row_height} body_height={body_height}"
+        );
+    }
+}

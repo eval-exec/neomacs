@@ -4569,6 +4569,11 @@ pub struct ResolvedFace {
     pub italic: bool,
     /// Font size in pixels.
     pub font_size: f32,
+    /// Merged logical `:height` in tenths of a point (`LFACE_HEIGHT_INDEX`),
+    /// retained so relative `:height` floats merge in tenths of a point before
+    /// `POINT_TO_PIXEL` conversion like GNU `merge_face_heights`
+    /// (`src/xfaces.c:2253-2270`).
+    font_height_tenths: Option<i32>,
     /// Underline style, GNU's `enum face_underline_type`
     /// (src/dispextern.h:1760-1765): 0=none, 1=line, 2=double-line, 3=wave,
     /// 4=dots, 5=dashes.
@@ -4652,6 +4657,7 @@ impl Default for ResolvedFace {
             font_weight: 400,
             italic: false,
             font_size: 14.0,
+            font_height_tenths: None,
             underline_style: 0,
             underline_position: NeoUnderlinePosition::FontMetric,
             underline_color: 0,
@@ -4707,6 +4713,7 @@ impl PartialEq for ResolvedFace {
             && self.font_weight == other.font_weight
             && self.italic == other.italic
             && self.font_size == other.font_size
+            && self.font_height_tenths == other.font_height_tenths
             && self.underline_style == other.underline_style
             && self.underline_position == other.underline_position
             && self.underline_color == other.underline_color
@@ -4840,6 +4847,7 @@ impl ResolvedFace {
         };
         std::sync::Arc::ptr_eq(left, right)
             && self.font_size == other.font_size
+            && self.font_height_tenths == other.font_height_tenths
             && self.lisp_name == other.lisp_name
             && self.canonical_tty_role == other.canonical_tty_role
             && self.tty_space_identity == other.tty_space_identity
@@ -5632,17 +5640,54 @@ fn basic_face_role_for_symbol_object(value: Value) -> Option<BasicFace> {
 }
 
 impl FaceResolver {
-    fn resolve_face_height(&self, height: &FaceHeight, inherited_size: f32) -> f32 {
-        let candidate = match height {
+    fn resolve_face_height(
+        &self,
+        height: &FaceHeight,
+        inherited_size: f32,
+        inherited_tenths: Option<i32>,
+    ) -> (f32, Option<i32>) {
+        match height {
             FaceHeight::Absolute(tenths) => {
-                FaceSizeCandidate::Absolute(self.font_sizing.face_height_to_layout_pixels(*tenths))
+                let px = self.font_sizing.face_height_to_layout_pixels(*tenths);
+                let candidate = FaceSizeCandidate::Absolute(px);
+                let size = self
+                    .frame_font_domain
+                    .resolve_face_size(candidate, inherited_size);
+                let resolved_tenths = if *tenths > 0 && px > 0.0 {
+                    Some(*tenths)
+                } else {
+                    inherited_tenths
+                };
+                (size, resolved_tenths)
             }
             FaceHeight::Relative(factor) => {
-                FaceSizeCandidate::Relative(inherited_size * *factor as f32)
+                if matches!(self.frame_font_domain, FrameFontDomain::Graphic { .. })
+                    && let Some(base_tenths) = inherited_tenths
+                {
+                    // GNU `merge_face_heights` (src/xfaces.c:2265):
+                    // `make_fixnum (XFLOAT_DATA (from) * XFIXNUM (to))` truncates
+                    // toward zero in tenths of a point before `POINT_TO_PIXEL`.
+                    let merged_tenths = (*factor * f64::from(base_tenths)) as i32;
+                    let candidate = FaceSizeCandidate::Relative(
+                        self.font_sizing.face_height_to_layout_pixels(merged_tenths),
+                    );
+                    let size = self
+                        .frame_font_domain
+                        .resolve_face_size(candidate, inherited_size);
+                    let resolved_tenths = if merged_tenths > 0 {
+                        Some(merged_tenths)
+                    } else {
+                        inherited_tenths
+                    };
+                    return (size, resolved_tenths);
+                }
+                let candidate = FaceSizeCandidate::Relative(inherited_size * *factor as f32);
+                let size = self
+                    .frame_font_domain
+                    .resolve_face_size(candidate, inherited_size);
+                (size, None)
             }
-        };
-        self.frame_font_domain
-            .resolve_face_size(candidate, inherited_size)
+        }
     }
 
     /// Commit the default font that the graphic backend actually opened.
@@ -5651,7 +5696,18 @@ impl FaceResolver {
     pub(crate) fn retain_opened_default_font_size(&mut self, opened_size: GraphicFontSizePx) {
         // The realized default may be shared with the previous transaction's
         // pin; a backend font installation is the rare case that must fork it.
-        std::sync::Arc::make_mut(&mut self.default_face).font_size = opened_size.get();
+        let df = std::sync::Arc::make_mut(&mut self.default_face);
+        let opened = opened_size.get();
+        let tenths_match_opened = df.font_height_tenths.is_some_and(|tenths| {
+            (self.font_sizing.face_height_to_layout_pixels(tenths) - opened).abs() < 0.5
+        });
+        if !tenths_match_opened {
+            df.font_height_tenths = Some(
+                self.font_sizing
+                    .face_height_tenths_for_layout_pixels(opened.round().max(1.0) as u32),
+            );
+        }
+        df.font_size = opened;
         self.frame_font_domain
             .retain_opened_graphic_size(opened_size);
     }
@@ -5727,14 +5783,21 @@ impl FaceResolver {
             .map(FontWeight::css_weight)
             .unwrap_or(FontWeight::NORMAL.css_weight());
         df.italic = neo_default.slant.map(|s| s.is_italic()).unwrap_or(false);
-        let requested_default_size = match &neo_default.height {
-            Some(FaceHeight::Absolute(tenths)) => font_sizing.face_height_to_layout_pixels(*tenths),
-            _ => default_font_size,
+        let (requested_default_size, default_height_tenths) = match &neo_default.height {
+            Some(FaceHeight::Absolute(tenths)) if *tenths > 0 => {
+                let px = font_sizing.face_height_to_layout_pixels(*tenths);
+                (px, (px > 0.0).then_some(*tenths))
+            }
+            Some(FaceHeight::Absolute(tenths)) => {
+                (font_sizing.face_height_to_layout_pixels(*tenths), None)
+            }
+            _ => (default_font_size, None),
         };
         df.font_size = frame_font_domain.resolve_face_size(
             FaceSizeCandidate::Absolute(requested_default_size),
             default_font_size,
         );
+        df.font_height_tenths = default_height_tenths;
         df.extend = neo_default.extend.unwrap_or(false);
         df.overstrike = neo_default.overstrike;
 
@@ -6570,7 +6633,8 @@ impl FaceResolver {
             rf.italic = slant.is_italic();
         }
         if let Some(height) = &face.height {
-            rf.font_size = self.resolve_face_height(height, rf.font_size);
+            (rf.font_size, rf.font_height_tenths) =
+                self.resolve_face_height(height, rf.font_size, rf.font_height_tenths);
         }
 
         match &face.underline {
@@ -7776,7 +7840,11 @@ impl FaceResolver {
         }
         // Font height
         if let Some(h) = &face.height {
-            rf.font_size = self.resolve_face_height(h, self.default_face.font_size);
+            (rf.font_size, rf.font_height_tenths) = self.resolve_face_height(
+                h,
+                self.default_face.font_size,
+                self.default_face.font_height_tenths,
+            );
         }
 
         // Underline

@@ -89,6 +89,9 @@ mod cursor_geometry_telemetry;
 #[path = "cursor_row_walk_gui_oracle.rs"]
 mod cursor_row_walk_gui_oracle;
 
+#[path = "header_line_recenter_gui_oracle.rs"]
+mod header_line_recenter_gui_oracle;
+
 // Only the Linux desktop-font suites (which pin a Linux font package) use
 // this helper; compiling it on other hosts is dead code.
 #[cfg(target_os = "linux")]

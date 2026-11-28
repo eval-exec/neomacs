@@ -73,6 +73,10 @@ impl<'a> PublishedWindowRegions<'a> {
         Self::extent_pixels(&self.regions.text_body).map(|(_, height)| height)
     }
 
+    pub(crate) fn outer_height_pixels(self) -> Result<i64, GeometryError> {
+        Self::extent_pixels(&self.regions.outer).map(|(_, height)| height)
+    }
+
     /// Margin columns are stored scalars in the publication, not a projection
     /// of a rectangle, so reading them needs no geometry conversion.
     pub(crate) fn left_margin_columns(self) -> i64 {

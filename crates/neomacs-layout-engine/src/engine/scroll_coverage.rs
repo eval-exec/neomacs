@@ -1354,7 +1354,7 @@ impl LayoutEngine {
             evaluator.face_table(),
             evaluator.variables(),
         );
-        let resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
+        let mut resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
             evaluator.face_table(),
             0xffffff,
             bootstrap.background,
@@ -1362,6 +1362,11 @@ impl LayoutEngine {
             ws,
             self.font_sizing,
         );
+        if let Some(opened) =
+            crate::font::frame_metrics::GraphicFontSizePx::new(key.font_pixel_size)
+        {
+            resolver.retain_opened_default_font_size(opened);
+        }
         resolver.set_current_window_parameters(
             evaluator.frame_manager().window_parameters_pairs(window),
         );
