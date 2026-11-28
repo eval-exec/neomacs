@@ -23,7 +23,12 @@
 //!
 //! ```compile_fail,E0451
 //! use neovm_value::tagged::gc::OwnerEraReserve;
-//! let _ = OwnerEraReserve { cons: Vec::new() };
+//! let _ = OwnerEraReserve {
+//!     heap: None,
+//!     cons: None,
+//!     open_cons: None,
+//!     _thread: std::marker::PhantomData,
+//! };
 //! ```
 
 use super::super::cons_allocator::{OwnerConsLease, OwnerConsRange};

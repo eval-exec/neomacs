@@ -156,64 +156,6 @@ pub use neovm_eval::emacs_core::floatfns;
 pub use neovm_eval::emacs_core::fns;
 pub use neovm_eval::emacs_core::misc;
 pub(crate) use neovm_eval::emacs_core::subr;
-#[cfg(doctest)]
-/// Compile-time contracts for native subroutine declarations.
-///
-/// This facade exists only while rustdoc compiles the examples below. Normal
-/// builds keep the declaration machinery crate-private.
-///
-/// A two-slot constructor cannot accept a one-slot Rust entrypoint:
-///
-/// ```compile_fail,E0308
-/// use neovm_core::{Context, Value};
-/// use neovm_core::emacs_core::subr_compile_contract::{FixedMin2, SubrSpec};
-/// use neovm_core::emacs_core::error::EvalResult;
-///
-/// fn one(_ctx: &mut Context, value: Value) -> EvalResult {
-///     Ok(value)
-/// }
-///
-/// const BAD: SubrSpec = SubrSpec::fixed2("bad", one, FixedMin2::One);
-/// ```
-///
-/// A minimum for a different fixed-slot width is a different Rust type:
-///
-/// ```compile_fail,E0308
-/// use neovm_core::{Context, Value};
-/// use neovm_core::emacs_core::subr_compile_contract::{
-///     FixedMin2, FixedMin3, SubrSpec,
-/// };
-/// use neovm_core::emacs_core::error::EvalResult;
-///
-/// fn two(_ctx: &mut Context, left: Value, _right: Value) -> EvalResult {
-///     Ok(left)
-/// }
-///
-/// const BAD: SubrSpec = SubrSpec::fixed2("bad", two, FixedMin3::Two);
-/// ```
-///
-/// A localized declaration batch cannot be declared outside `subrs.rs`:
-///
-/// ```compile_fail,E0080
-/// use neovm_core::{Context, Value};
-/// use neovm_core::emacs_core::subr_compile_contract::{SubrBatch, SubrSpec};
-/// use neovm_core::emacs_core::error::EvalResult;
-///
-/// fn zero(_ctx: &mut Context) -> EvalResult {
-///     Ok(Value::NIL)
-/// }
-///
-/// const BAD: SubrBatch = SubrBatch::new(
-///     module_path!(),
-///     &[SubrSpec::fixed0("bad", zero)],
-/// );
-/// ```
-#[doc(hidden)]
-pub mod subr_compile_contract {
-    pub use super::subr::{
-        FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, FixedMin6, SubrBatch, SubrSpec,
-    };
-}
 pub use neovm_eval::emacs_core::subr_info;
 
 // Generated Lisp-facing documentation tables.

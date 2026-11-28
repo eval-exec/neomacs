@@ -5,6 +5,56 @@
 //! command metadata together.  The runtime representation remains the static
 //! `SymId`-indexed registry described in the static-subr design; this module is
 //! the declaration seam above it.
+//!
+//! # Compile-time contracts
+//!
+//! A two-slot constructor cannot accept a one-slot Rust entrypoint:
+//!
+//! ```compile_fail,E0308
+//! use neovm_eval::emacs_core::Context;
+//! use neovm_eval::emacs_core::subr::{FixedMin2, SubrSpec};
+//! use neovm_value::error::EvalResult;
+//! use neovm_value::value::Value;
+//!
+//! fn one(_ctx: &mut Context, value: Value) -> EvalResult {
+//!     Ok(value)
+//! }
+//!
+//! const BAD: SubrSpec = SubrSpec::fixed2("bad", one, FixedMin2::One);
+//! ```
+//!
+//! A minimum for a different fixed-slot width is a different Rust type:
+//!
+//! ```compile_fail,E0308
+//! use neovm_eval::emacs_core::Context;
+//! use neovm_eval::emacs_core::subr::{FixedMin2, FixedMin3, SubrSpec};
+//! use neovm_value::error::EvalResult;
+//! use neovm_value::value::Value;
+//!
+//! fn two(_ctx: &mut Context, left: Value, _right: Value) -> EvalResult {
+//!     Ok(left)
+//! }
+//!
+//! const BAD: SubrSpec = SubrSpec::fixed2("bad", two, FixedMin3::Two);
+//! ```
+//!
+//! A localized declaration batch cannot be declared outside `subrs.rs`:
+//!
+//! ```compile_fail,E0080
+//! use neovm_eval::emacs_core::Context;
+//! use neovm_eval::emacs_core::subr::{SubrBatch, SubrSpec};
+//! use neovm_value::error::EvalResult;
+//! use neovm_value::value::Value;
+//!
+//! fn zero(_ctx: &mut Context) -> EvalResult {
+//!     Ok(Value::NIL)
+//! }
+//!
+//! const BAD: SubrBatch = SubrBatch::new(
+//!     module_path!(),
+//!     &[SubrSpec::fixed0("bad", zero)],
+//! );
+//! ```
 
 use crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec;
 use crate::emacs_core::eval::subr_abi::{

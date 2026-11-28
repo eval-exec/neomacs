@@ -2950,10 +2950,17 @@ impl Context {
     /// boundary, `bytecode_branch_maybe_gc_and_quit` from the VM and the JIT,
     /// and `builtin_garbage_collect`). So
     ///
-    /// ```ignore
+    /// ```compile_fail,E0502
+    /// # use neovm_eval::emacs_core::Context;
+    /// # use neovm_value::error::EvalResult;
+    /// # use neovm_value::value::Value;
+    /// # fn use_bytes(_: &[u8]) {}
+    /// # fn check(ctx: &mut Context, v: Value, f: Value, args: Vec<Value>) -> EvalResult {
     /// let s = ctx.lisp_string(v).unwrap();
     /// ctx.apply(f, args)?;   // error[E0502]: cannot borrow `*ctx` as mutable
     /// use_bytes(s.as_bytes());
+    /// # Ok(Value::NIL)
+    /// # }
     /// ```
     ///
     /// does not compile, whereas the same code written with

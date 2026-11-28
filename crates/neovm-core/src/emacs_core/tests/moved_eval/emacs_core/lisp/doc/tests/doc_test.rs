@@ -1126,7 +1126,7 @@ fn documentation_property_eval_load_path_raw_t_preserves_ascii_quotes() {
 /// DISPLAY were *equal*.  Both halves were artefacts of a bootstrap seed that
 /// ledger 178 removed, and the seed's text is why:
 ///
-/// ```ignore
+/// ```text
 /// ("ctl-x-4-map", "Keymap for subcommands of C-x 4."),
 /// ```
 ///

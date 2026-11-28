@@ -1004,8 +1004,8 @@ impl LispSymbol {
 /// its tag:
 ///
 /// ```compile_fail,E0616
-/// use neovm_core::emacs_core::intern::intern;
-/// use neovm_core::emacs_core::symbol::LispSymbol;
+/// use neovm_value::intern::intern;
+/// use neovm_value::symbol::LispSymbol;
 ///
 /// let symbol = LispSymbol::new(intern("p61-word"));
 /// let _word = &symbol.val;
@@ -1014,8 +1014,8 @@ impl LispSymbol {
 /// nor set the tag apart from its payload:
 ///
 /// ```compile_fail,E0624
-/// use neovm_core::emacs_core::intern::intern;
-/// use neovm_core::emacs_core::symbol::{LispSymbol, SymbolRedirect};
+/// use neovm_value::intern::intern;
+/// use neovm_value::symbol::{LispSymbol, SymbolRedirect};
 ///
 /// let symbol = LispSymbol::new(intern("p61-tag"));
 /// let mut flags = symbol.flags();
@@ -1026,7 +1026,7 @@ impl LispSymbol {
 /// names one a `defvar_*` registered:
 ///
 /// ```compile_fail,E0451
-/// use neovm_core::emacs_core::forward::{LispFwd, LispFwdType};
+/// use neovm_value::forward::{LispFwd, LispFwdType};
 ///
 /// let _forged = LispFwd {
 ///     ty: LispFwdType::Int,
@@ -1037,7 +1037,7 @@ impl LispSymbol {
 /// nor copied out of the storage it describes:
 ///
 /// ```compile_fail,E0507
-/// use neovm_core::emacs_core::forward::LispFwd;
+/// use neovm_value::forward::LispFwd;
 ///
 /// fn copy(fwd: &'static LispFwd) -> LispFwd {
 ///     *fwd
@@ -1047,7 +1047,7 @@ impl LispSymbol {
 /// and its slot is not lent out as a reference:
 ///
 /// ```compile_fail,E0599
-/// use neovm_core::emacs_core::forward::LispFwd;
+/// use neovm_value::forward::LispFwd;
 ///
 /// fn peek(fwd: &'static LispFwd) {
 ///     let _ = fwd.load_ref();

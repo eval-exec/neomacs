@@ -232,7 +232,7 @@ const _: () = {
 /// and the compiler will not object.  That is exactly what happened -- the
 /// pre-176 code read
 ///
-/// ```ignore
+/// ```text
 /// snarfed.and_then(var_docs::lookup).or_else(|| startup_variable_doc_stub(sym))
 /// ```
 ///

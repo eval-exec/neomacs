@@ -25,6 +25,7 @@ on:
           - neomacs-melpa-direct-windows-tests
           - compile-contracts
           - neovm-eval-tests
+          - neovm-doctests
           - compile-contracts-macos
           - gnu-emacs-oracle
           - gnu-emacs-oracle-macos
@@ -702,6 +703,40 @@ jobs:
 
       - name: Run the release-native-depth mint regressions
         run: cargo nextest run -p neovm-eval --lib --features release-native-depth -E 'test(n5_release_)'
+
+  # cargo nextest does not execute doctests, so the doc-comment contracts in
+  # neovm-value, neovm-eval, and neovm-core had no CI runner (#863). Running
+  # each crate in its own `cargo test --doc` invocation avoids unifying
+  # neovm-core/neovm-eval's `[dev-dependencies]` (`neovm-value/test-support`)
+  # onto neovm-value, and scripts/ci/run-doctests.py also verifies declared
+  # `compile_fail,E0xxx` diagnostics and refuses `ignored` doctests.
+  neovm-doctests:
+    name: neovm doctests (linux x86_64)
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'neovm-doctests' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-neovm-doctests-linux-x86_64
+          cache-shared-key: linux-x86_64-dev
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: false
+
+      - name: Self-test the doctest runner
+        run: python3 -I -m unittest discover -s scripts/ci/tests -p 'test_run_doctests.py' -v
+
+      - name: Run isolated doctests with compile_fail diagnostic verification
+        run: python3 -I scripts/ci/run-doctests.py
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps

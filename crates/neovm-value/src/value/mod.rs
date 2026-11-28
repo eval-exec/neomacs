@@ -3804,8 +3804,8 @@ impl TaggedValue {
     /// stop failing, which is the red measurement for 167:
     ///
     /// ```compile_fail,E0515
-    /// use neovm_core::Value;
-    /// use neovm_core::heap_types::LispString;
+    /// use neovm_value::heap_types::LispString;
+    /// use neovm_value::value::Value;
     ///
     /// // A borrow of a heap string cannot outlive the `Value` it was read
     /// // from: the collector is free to take the object the moment nothing

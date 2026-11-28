@@ -11,12 +11,12 @@
 //! from its live buffer (`marker_position_as_int_with_buffers`). Purely structural
 //! extractions simply ignore the evaluator.
 //!
-//! `typed_subr!` generates the fixed-arity `SubrFn`-shaped wrapper
-//! (`fn(&mut Context, Value, ...) -> EvalResult`) that extracts each
+//! `typed_subr!` is crate-internal and generates the fixed-arity `SubrFn`-shaped
+//! wrapper (`fn(&mut Context, Value, ...) -> EvalResult`) that extracts each
 //! argument before the body runs, so a builtin body starts with its
 //! arguments already typed:
 //!
-//! ```ignore
+//! ```text
 //! typed_subr! {
 //!     /// Doc comment passes through to the generated fn.
 //!     pub(crate) fn builtin_example(eval, s: String, n: Option<i64>) -> EvalResult {

@@ -36,15 +36,17 @@ const _: () = assert!(align_of::<ThreadBlockedData>() > TAG_MASK);
 /// Owns its payload box and remains `!Send`/`!Sync`. Its payload's
 /// pin keeps roots in the owning Context registry, independent of activation.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// fn require_send<T: Send>() {}
-/// require_send::<neovm_core::emacs_core::error::Flow>();
+/// require_send::<neovm_value::error::Flow>();
 /// ```
 #[repr(transparent)]
 pub struct Flow {
     word: NonNull<()>,
     _not_send: PhantomData<*const ()>,
 }
+
+static_assertions::assert_not_impl_any!(Flow: Send, Sync);
 
 impl Flow {
     #[inline(always)]
