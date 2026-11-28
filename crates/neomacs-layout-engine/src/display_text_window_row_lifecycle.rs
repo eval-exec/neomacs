@@ -17,7 +17,7 @@ use crate::display_row::special_glyphs::{
     install_text_window_terminal_right_border,
 };
 use crate::display_row::walk_state::{
-    DisplayRowSourceStart, TallPointRowScrollContext,
+    DisplayRowSourceStart, TallPointRowScrollContext, TallPointRowScrollTarget,
     next_window_start_for_partially_visible_point_row,
     next_window_start_for_point_line_continuation,
     next_window_start_for_tall_partially_visible_point_row, next_window_start_from_visible_rows,
@@ -376,6 +376,7 @@ pub(crate) fn ordinary_eob_row_admission(
 pub(crate) struct TallPointRowScrollMode {
     pub(crate) temp_scroll_step: bool,
     pub(crate) already_scrolled: bool,
+    pub(crate) initial_extra_scroll_margin_lines: i64,
 }
 
 pub(crate) struct TextWindowVisibilityRetryRequest<'a, 'buf, B: LayoutBufferView> {
@@ -1004,6 +1005,22 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
                 .map(|end_lisp| point_lisp > end_lisp)
                 .unwrap_or(self.point_charpos > self.charpos);
 
+        // When point sits on a laid-out bottom-overflowing row at least as tall
+        // as the text area, row-count `scroll_down_from_available_rows` would
+        // shrink `laid_out_rows` and fire a bogus row-count scroll before
+        // `next_window_start_for_tall_partially_visible_point_row` runs GNU's
+        // pixel-accurate `try_scrolling` + `scroll_margin` loop.
+        let text_area_height = self.text_area_bottom.saturating_sub(self.text_area_top);
+        let point_on_tall_partially_visible_row = self.tall_point_row_context.is_some()
+            && text_area_height > 0
+            && self.rows.iter().any(|row| {
+                row.start_buffer_pos
+                    .zip(row.end_buffer_pos)
+                    .is_some_and(|(start, end)| start <= point_lisp && point_lisp <= end)
+                    && row.height >= text_area_height
+                    && row.y.saturating_add(row.height) > self.text_area_bottom
+            });
+
         // GNU `resize_mini_window` (src/xdisp.c:13361) scrolls a mini-window
         // whose measured content exceeds `max-mini-window-height` so the END
         // (where point sits in an active fido/vertico minibuffer) shows.  This
@@ -1011,52 +1028,73 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         // minibuffer is no longer excluded.  An inactive echo-area mini-window
         // has point reset to BEGV, so `point_beyond_visible_span` is false and
         // it never scrolls.
-        let scroll_down = if self.forward_viewport_measurement.is_some()
-            || eob_row_unavailable
-            || visible_progress > self.window_start
+        let scroll_down = if !point_on_tall_partially_visible_row
+            && (self.forward_viewport_measurement.is_some()
+                || eob_row_unavailable
+                || visible_progress > self.window_start)
         {
             self.scroll_down_decision(point_lisp, visible_end_lisp, point_beyond_visible_span)
         } else {
             ViewportDecision::Keep
         };
-        let point_row_window_start = next_window_start_for_partially_visible_point_row(
-            self.rows,
-            self.point_charpos,
-            self.text_area_top,
-            self.text_area_bottom,
-            self.window_start,
-        )
-        .map(|fitted| {
-            match self
-                .scroll_policy
-                .partially_visible_point_row(self.rows.len(), self.scroll_margin)
-            {
-                PartiallyVisiblePointRow::FitRow => fitted,
-                // A recenter that would not move the start forward cannot
-                // bring the bottom row into view; keep the fitting start.
-                PartiallyVisiblePointRow::Recenter { lines_above_point } => Some(line_start_above(
-                    self.point_charpos,
-                    lines_above_point,
-                    self.accessible_start,
-                    self.buf_access,
-                ))
-                .filter(|start| *start > self.window_start)
-                .unwrap_or(fitted),
-            }
-        })
-        .or_else(|| {
-            let ctx = self.tall_point_row_context?;
-            next_window_start_for_tall_partially_visible_point_row(
+        let make_cursor_line_fully_visible = self
+            .tall_point_row_context
+            .is_none_or(|ctx| ctx.make_cursor_line_fully_visible);
+        let point_row_window_start = if !make_cursor_line_fully_visible {
+            None
+        } else {
+            next_window_start_for_partially_visible_point_row(
                 self.rows,
                 self.point_charpos,
                 self.text_area_top,
                 self.text_area_bottom,
                 self.window_start,
-                self.scroll_policy,
-                self.scroll_margin,
-                ctx,
             )
-        });
+            .map(|fitted| {
+                match self
+                    .scroll_policy
+                    .partially_visible_point_row(self.rows.len(), self.scroll_margin)
+                {
+                    PartiallyVisiblePointRow::FitRow => fitted,
+                    // A recenter that would not move the start forward cannot
+                    // bring the bottom row into view; keep the fitting start.
+                    PartiallyVisiblePointRow::Recenter { lines_above_point } => {
+                        Some(line_start_above(
+                            self.point_charpos,
+                            lines_above_point,
+                            self.accessible_start,
+                            self.buf_access,
+                        ))
+                        .filter(|start| *start > self.window_start)
+                        .unwrap_or(fitted)
+                    }
+                }
+            })
+            .or_else(|| {
+                let ctx = self.tall_point_row_context?;
+                match next_window_start_for_tall_partially_visible_point_row(
+                    self.rows,
+                    self.point_charpos,
+                    self.text_area_top,
+                    self.text_area_bottom,
+                    self.window_start,
+                    self.scroll_policy,
+                    self.scroll_margin,
+                    ctx,
+                )? {
+                    TallPointRowScrollTarget::WindowStart(pos) => Some(pos),
+                    TallPointRowScrollTarget::LinesBeforeCurrentStart(lines) => {
+                        Some(line_start_above(
+                            self.window_start,
+                            lines,
+                            self.accessible_start,
+                            self.buf_access,
+                        ))
+                        .filter(|&pos| pos != self.window_start)
+                    }
+                }
+            })
+        };
         // GNU cursor_row_fully_visible_p tests the screen row, not the
         // remainder of its physical source line. A wrapped line may continue
         // below the viewport while point's row is already completely visible.

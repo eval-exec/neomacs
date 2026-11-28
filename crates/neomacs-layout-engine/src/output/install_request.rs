@@ -23,6 +23,7 @@ pub(crate) struct OutputCursorInstallRequest {
     style: CursorStyle,
     color: Color,
     cursor_fg: Color,
+    clip_window_id: Option<DisplayWindowId>,
 }
 
 impl OutputCursorInstallRequest {
@@ -52,7 +53,16 @@ impl OutputCursorInstallRequest {
             style,
             color,
             cursor_fg,
+            clip_window_id: None,
         }
+    }
+
+    pub(crate) const fn with_clip_window_id(
+        mut self,
+        clip_window_id: Option<DisplayWindowId>,
+    ) -> Self {
+        self.clip_window_id = clip_window_id;
+        self
     }
 
     pub(crate) fn cursor_item(self) -> CursorItem {
@@ -68,6 +78,7 @@ impl OutputCursorInstallRequest {
             color: self.color,
             cursor_fg: self.cursor_fg,
             ascent: self.ascent,
+            clip_window_id: self.clip_window_id,
         }
     }
 }

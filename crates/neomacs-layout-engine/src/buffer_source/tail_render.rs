@@ -245,17 +245,26 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         rows: &'rows [DisplayRowSnapshot],
         charpos: i64,
         point_is_visible_eob: bool,
+        point_row_prefix_height: Option<i64>,
         buf_access: &'rows RustBufferAccess<'buf, B>,
     ) -> TextWindowVisibilityRetryRequest<'rows, 'buf, B>
     where
         B: LayoutBufferView,
     {
+        let point = self.params.point_charpos().get();
+        let point_row_ends_at_eob_without_newline =
+            crate::display_row::walk_state::point_row_ends_at_eob_without_newline(
+                rows,
+                point,
+                self.accessible_end,
+                buf_access,
+            );
         TextWindowVisibilityRetryRequest::new(
             rows,
             self.window_start,
             self.accessible_start,
             self.accessible_end,
-            self.params.point_charpos().get(),
+            point,
             charpos,
             point_is_visible_eob,
             self.retry_bounds.text_area_top(),
@@ -267,11 +276,18 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         )
         .with_tall_point_row_context(TallPointRowScrollContext {
             default_line_height: self.char_height.round().max(1.0) as i64,
+            scroll_step: self.params.scroll_step,
+            make_cursor_line_fully_visible: self.params.make_cursor_line_fully_visible,
             is_minibuffer: self.params.is_minibuffer(),
             has_vscroll: self.params.vscroll != 0,
             force_start: self.params.force_start,
             temp_scroll_step: self.tall_point_row_scroll_mode.temp_scroll_step,
             already_scrolled_this_redisplay: self.tall_point_row_scroll_mode.already_scrolled,
+            initial_extra_scroll_margin_lines: self
+                .tall_point_row_scroll_mode
+                .initial_extra_scroll_margin_lines,
+            point_row_prefix_height,
+            point_row_ends_at_eob_without_newline,
         })
     }
 
@@ -382,8 +398,35 @@ where
                 row_source_start,
                 source_render.output_render(),
             ));
+        let point = tail_context.params.point_charpos().get();
+        let point_row_prefix_height = source_render
+            .output_rows()
+            .iter()
+            .find_map(|row| {
+                let start = row
+                    .start_buffer_pos
+                    .map(crate::coords::lisp_char_pos_to_layout_i64)
+                    .unwrap_or(i64::MAX);
+                let end = row
+                    .end_buffer_pos
+                    .map(crate::coords::lisp_char_pos_to_layout_i64)
+                    .unwrap_or(i64::MIN);
+                (start <= point && point <= end).then_some(row.row)
+            })
+            .and_then(|row| {
+                source_render.max_glyph_height_on_row_before_pos(
+                    row,
+                    crate::coords::layout_i64_char_pos_to_lisp_char_pos(point),
+                )
+            });
         let retry = tail_context
-            .visibility_retry_request(source_render.output_rows(), charpos, false, buf_access)
+            .visibility_retry_request(
+                source_render.output_rows(),
+                charpos,
+                false,
+                point_row_prefix_height,
+                buf_access,
+            )
             .decide();
         return BufferSourcePostLoopRenderOutcome {
             retry,
@@ -565,11 +608,33 @@ where
     // further progress can be made. Advance by actual rendered row spans
     // from this pass, since wrapped and variable-height lines are exactly
     // where newline-based retry selection goes wrong.
+    let point = tail_context.params.point_charpos().get();
+    let point_row_prefix_height = source_render
+        .output_rows()
+        .iter()
+        .find_map(|row| {
+            let start = row
+                .start_buffer_pos
+                .map(crate::coords::lisp_char_pos_to_layout_i64)
+                .unwrap_or(i64::MAX);
+            let end = row
+                .end_buffer_pos
+                .map(crate::coords::lisp_char_pos_to_layout_i64)
+                .unwrap_or(i64::MIN);
+            (start <= point && point <= end).then_some(row.row)
+        })
+        .and_then(|row| {
+            source_render.max_glyph_height_on_row_before_pos(
+                row,
+                crate::coords::layout_i64_char_pos_to_lisp_char_pos(point),
+            )
+        });
     let retry = tail_context
         .visibility_retry_request(
             source_render.output_rows(),
             charpos,
             point_is_visible_eob,
+            point_row_prefix_height,
             buf_access,
         )
         .with_ordinary_eob_row_admission(ordinary_eob_row_admission)

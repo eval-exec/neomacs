@@ -795,6 +795,19 @@ pub struct WindowCursor {
     /// True for the selected window's cursor (the former phys_cursor). Effects
     /// and the slide animation target this entry.
     pub active: bool,
+    /// Optional owning window whose `text_body` clips this cursor. Decorative
+    /// cursors (`neomacs-visual-cursors`) carry synthetic negative `window_id`s
+    /// for effect-profile identity while still clipping to their owning window.
+    #[serde(default)]
+    pub clip_window_id: Option<DisplayWindowId>,
+}
+
+impl WindowCursor {
+    /// Window ID used to look up the `WindowInfo::text_body` clip rectangle.
+    #[inline]
+    pub fn clip_window_id(&self) -> DisplayWindowId {
+        self.clip_window_id.unwrap_or(self.window_id)
+    }
 }
 
 /// Which fringe a [`FrameGlyph::FringeBitmap`] belongs to.
@@ -2238,6 +2251,7 @@ impl FrameGlyphBuffer {
             cursor_fg: Color::BLACK,
             ascent: 0.0,
             active: false,
+            clip_window_id: None,
         });
     }
 
@@ -2390,6 +2404,7 @@ impl FrameGlyphBuffer {
             cursor_fg: cursor.cursor_fg,
             ascent: cursor.ascent,
             active: true,
+            clip_window_id: None,
         };
         // Exactly one active entry per window: replace an existing active entry
         // for this window rather than duplicating it.

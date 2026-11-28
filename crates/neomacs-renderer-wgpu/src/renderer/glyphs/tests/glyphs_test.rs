@@ -492,6 +492,7 @@ fn make_cursor(
         cursor_fg: Color::BLACK,
         ascent: 12.0,
         active: true,
+        clip_window_id: None,
     }
 }
 
@@ -1268,4 +1269,99 @@ fn coverage_shader_validates_grayscale_and_subpixel_entry_points() {
             "missing coverage entry point {name}"
         );
     }
+}
+
+#[test]
+fn tall_cursors_clip_to_window_text_body_for_all_styles() {
+    use crate::WgpuRenderer;
+    use neomacs_display_protocol::frame_glyphs::{
+        PresentedCellOrigin, PresentedWindowGeometry, PresentedWindowRegions, WindowInfo,
+    };
+
+    let body = Rect::new(8.0, 17.0, 640.0, 119.0);
+    // Bottom-overflowing tall cursor (y=51, h=164 -> bottom 215 > 136).
+    let clipped_bottom = WgpuRenderer::clip_rect_to_bounds(8.0, 51.0, 84.0, 164.0, Some(body))
+        .expect("overlapping bottom-overflow cursor must remain visible");
+    assert_eq!(clipped_bottom, (8.0, 51.0, 84.0, 85.0));
+
+    // Top-vscrolled tall cursor (y=-3, h=164 -> top -3 < 17, bottom 161 > 136).
+    let clipped_both = WgpuRenderer::clip_rect_to_bounds(8.0, -3.0, 84.0, 164.0, Some(body))
+        .expect("vscrolled tall cursor must clip at both top and bottom of text_body");
+    assert_eq!(clipped_both, (8.0, 17.0, 84.0, 119.0));
+
+    // Hbar at bottom of a bottom-overflowing tall cursor lies wholly below text_body.
+    assert_eq!(
+        WgpuRenderer::clip_rect_to_bounds(8.0, 51.0 + 164.0 - 2.0, 84.0, 2.0, Some(body)),
+        None,
+        "hbar below text_body bottom must be clipped out"
+    );
+
+    // Hollow cursor: top/left/right clip to text_body, bottom edge is clipped out.
+    assert_eq!(
+        WgpuRenderer::clip_rect_to_bounds(8.0, 51.0, 84.0, 1.0, Some(body)),
+        Some((8.0, 51.0, 84.0, 1.0))
+    );
+    assert_eq!(
+        WgpuRenderer::clip_rect_to_bounds(8.0, 51.0 + 164.0 - 1.0, 84.0, 1.0, Some(body)),
+        None
+    );
+    assert_eq!(
+        WgpuRenderer::clip_rect_to_bounds(8.0, 51.0, 1.0, 164.0, Some(body)),
+        Some((8.0, 51.0, 1.0, 85.0))
+    );
+
+    // Bar cursor clips vertically to text_body.
+    assert_eq!(
+        WgpuRenderer::clip_rect_to_bounds(8.0, 51.0, 2.0, 164.0, Some(body)),
+        Some((8.0, 51.0, 2.0, 85.0))
+    );
+
+    // Animated quad clamps all 4 corners inside text_body.
+    let quad = [(8.0, 51.0), (92.0, 51.0), (92.0, 215.0), (8.0, 215.0)];
+    let clipped_quad = WgpuRenderer::clip_quad_to_bounds(&quad, Some(body))
+        .expect("overlapping quad must remain non-empty");
+    for &(_, y) in &clipped_quad {
+        assert!(
+            y >= body.y && y <= body.y + body.height,
+            "quad corner y={y} escaped text_body [{}, {}]",
+            body.y,
+            body.y + body.height
+        );
+    }
+
+    // Lookup via FrameGlyphBuffer::window_infos applies child-frame offset.
+    let mut frame = FrameGlyphBuffer::new();
+    let wid = DisplayWindowId::new(7);
+    let info = WindowInfo {
+        window_id: wid,
+        buffer_id: 1,
+        window_start: 1,
+        window_end: 10,
+        buffer_size: 10,
+        buffer_modiff: Default::default(),
+        bounds: Rect::new(0.0, 0.0, 656.0, 153.0),
+        geometry: PresentedWindowGeometry::Complete {
+            cell_origin: PresentedCellOrigin::default(),
+            regions: PresentedWindowRegions {
+                outer: Rect::new(0.0, 0.0, 656.0, 153.0),
+                text_body: body,
+                ..PresentedWindowRegions::default()
+            },
+        },
+        line_number_field: None,
+        mode_line_height: 17.0,
+        header_line_height: 17.0,
+        tab_line_height: 0.0,
+        selected: true,
+        is_minibuffer: false,
+        char_height: 17.0,
+        buffer_name: String::new(),
+        buffer_file_name: String::new(),
+        modified: false,
+    };
+    frame.window_infos.push(info);
+    assert_eq!(
+        WgpuRenderer::cursor_text_body_clip(&frame, wid, 10.0, 20.0),
+        Some(Rect::new(18.0, 37.0, 640.0, 119.0))
+    );
 }

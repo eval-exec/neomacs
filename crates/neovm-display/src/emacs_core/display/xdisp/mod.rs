@@ -11925,11 +11925,15 @@ pub fn builtin_posn_at_point(
         args.get(1),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
-    let Some((window_id, metrics)) =
+    let Some((window_id, mut metrics)) =
         resolve_exact_visible_metrics_with_layout(eval, args.get(1), args.first())?
     else {
         return Ok(Value::NIL);
     };
+    // GNU `pos_visible_p` (`src/xdisp.c:2063-2065`) clamps `*y` to
+    // `max(top_y, window_top_y)` for top-vscrolled rows, so `(posn-at-point)`
+    // reports `0` while `(cursor-info)` preserves the raw negative vscroll `y`.
+    metrics.y = metrics.y.max(0);
     // GNU `Fposn_at_point` (src/keyboard.c:13073-13097) builds the posn from
     // `pos-visible-in-window-p's (X Y): "Point invisible due to hscrolling?
     // X can be -1 when a newline in a R2L line overflows into the left

@@ -335,6 +335,44 @@ pub(super) fn build_filled_box_cursor_cells(
         if !matches!(cursor.style, CursorStyle::FilledBox) {
             continue;
         }
+        let matching_info = frame
+            .window_infos
+            .iter()
+            .find(|info| info.window_id == cursor.clip_window_id());
+        let text_body = matching_info.and_then(|info| match info.geometry {
+            neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+                regions,
+                ..
+            } if regions.text_body.width > 0.0 && regions.text_body.height > 0.0 => {
+                Some(regions.text_body)
+            }
+            _ => None,
+        });
+        let (draw_x, draw_y, draw_w, draw_h) = frame.cursor_draw_rect(
+            cursor.slot_id,
+            cursor.style,
+            cursor.ascent,
+            (cursor.x, cursor.y, cursor.width, cursor.height),
+        );
+        let (cx, cy, cw, ch) = if let Some(body) = text_body {
+            let x0 = draw_x.max(body.x);
+            let y0 = draw_y.max(body.y);
+            let x1 = (draw_x + draw_w).min(body.x + body.width);
+            let y1 = (draw_y + draw_h).min(body.y + body.height);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            (x0, y0, x1 - x0, y1 - y0)
+        } else {
+            (draw_x, draw_y, draw_w, draw_h)
+        };
+        let x0 = (cx * scale).floor().max(0.0) as u32;
+        let y0 = (cy * scale).floor().max(0.0) as u32;
+        let x1 = ((cx + cw) * scale).ceil().max(0.0) as u32;
+        let y1 = ((cy + ch) * scale).ceil().max(0.0) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
         let mut mini = FrameGlyphBuffer::with_size(frame.width, frame.height);
         mini.presentation_id = frame.presentation_id;
         mini.clone_font_bindings_from(frame);
@@ -348,6 +386,9 @@ pub(super) fn build_filled_box_cursor_cells(
         // is warm in the atlas" premise) and again on the next real frame.
         mini.font_pixel_size = frame.font_pixel_size;
         mini.char_height = frame.char_height;
+        if let Some(info) = matching_info {
+            mini.window_infos.push(info.clone());
+        }
         for glyph in &frame.glyphs {
             if glyph.slot_id() == Some(cursor.slot_id) {
                 mini.glyphs.push(glyph.clone());
@@ -363,15 +404,10 @@ pub(super) fn build_filled_box_cursor_cells(
         if let Some(effects) = frame.window_cursor_effects(cursor.window_id) {
             mini.set_window_cursor_effects(cursor.window_id, effects.clone());
         }
-        // The box covers the cell = the cursor rect; scissor to it in
-        // physical pixels (glyph positions are logical, scaled by the
-        // uniform, so the scissor rect is logical * scale).
-        let scissor = (
-            (cursor.x * scale).floor().max(0.0) as u32,
-            (cursor.y * scale).floor().max(0.0) as u32,
-            (cursor.width * scale).ceil().max(1.0) as u32,
-            (cursor.height * scale).ceil().max(1.0) as u32,
-        );
+        // The box covers the cell clipped to the owning window's text_body;
+        // scissor to it in physical pixels (glyph positions are logical,
+        // scaled by the uniform, so the scissor rect is logical * scale).
+        let scissor = (x0, y0, x1 - x0, y1 - y0);
         cells.push(RetainedCursorCell { mini, scissor });
     }
     cells

@@ -190,6 +190,8 @@ impl WgpuRenderer {
             let cursor_effects = frame_glyphs
                 .effective_window_cursor_effects(cursor.window_id, &self.effects)
                 .clone();
+            let clip_rect =
+                Self::cursor_text_body_clip(frame_glyphs, cursor.clip_window_id(), 0.0, 0.0);
             self.emit_cursor_visual(
                 cursor.window_id,
                 frame_glyphs.cursor_draw_rect(
@@ -198,6 +200,7 @@ impl WgpuRenderer {
                     cursor.ascent,
                     (cursor.x, cursor.y, cursor.width, cursor.height),
                 ),
+                clip_rect,
                 cursor.slot_id,
                 cursor.style,
                 &cursor.color,

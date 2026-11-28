@@ -556,6 +556,8 @@ impl WgpuRenderer {
                 )
             };
 
+            let clip_rect =
+                Self::cursor_text_body_clip(frame, cursor.clip_window_id(), offset_x, offset_y);
             match cursor.style {
                 CursorStyle::FilledBox => {
                     let paint = PresentedCursorPaint::resolve(
@@ -571,26 +573,29 @@ impl WgpuRenderer {
                         paint,
                     );
                     match presentation {
-                        FilledBoxPresentation::Settled { rect, .. } => self.add_rect(
+                        FilledBoxPresentation::Settled { rect, .. } => self.add_rect_clipped(
                             &mut cursor_bg_vertices,
                             rect.x,
                             rect.y,
                             rect.width,
                             rect.height,
+                            clip_rect,
                             &paint.body_background,
                         ),
                         FilledBoxPresentation::InFlight { shape, .. } => match shape {
-                            CursorShape::Rect(rect) => self.add_rect(
+                            CursorShape::Rect(rect) => self.add_rect_clipped(
                                 &mut cursor_bg_vertices,
                                 rect.x,
                                 rect.y,
                                 rect.width,
                                 rect.height,
+                                clip_rect,
                                 &paint.body_background,
                             ),
-                            CursorShape::Quad(corners) => self.add_quad(
+                            CursorShape::Quad(corners) => self.add_quad_clipped(
                                 &mut cursor_bg_vertices,
                                 &corners,
+                                clip_rect,
                                 &paint.body_background,
                             ),
                         },
@@ -601,35 +606,62 @@ impl WgpuRenderer {
                 }
                 CursorStyle::Bar(bar_w) => {
                     let bar_w = CursorStyle::bar_paint_width(bar_w, gw);
-                    self.add_rect(&mut cursor_vertices, gx, gy, bar_w, gh, &cursor.color);
+                    self.add_rect_clipped(
+                        &mut cursor_vertices,
+                        gx,
+                        gy,
+                        bar_w,
+                        gh,
+                        clip_rect,
+                        &cursor.color,
+                    );
                 }
                 CursorStyle::Hbar(hbar_h) => {
-                    self.add_rect(
+                    self.add_rect_clipped(
                         &mut cursor_vertices,
                         gx,
                         gy + gh - hbar_h,
                         CursorStyle::hbar_paint_width(gw),
                         hbar_h,
+                        clip_rect,
                         &cursor.color,
                     );
                 }
                 CursorStyle::Hollow => {
-                    self.add_rect(&mut cursor_vertices, gx, gy, gw, 1.0, &cursor.color);
-                    self.add_rect(
+                    self.add_rect_clipped(
+                        &mut cursor_vertices,
+                        gx,
+                        gy,
+                        gw,
+                        1.0,
+                        clip_rect,
+                        &cursor.color,
+                    );
+                    self.add_rect_clipped(
                         &mut cursor_vertices,
                         gx,
                         gy + gh - 1.0,
                         gw,
                         1.0,
+                        clip_rect,
                         &cursor.color,
                     );
-                    self.add_rect(&mut cursor_vertices, gx, gy, 1.0, gh, &cursor.color);
-                    self.add_rect(
+                    self.add_rect_clipped(
+                        &mut cursor_vertices,
+                        gx,
+                        gy,
+                        1.0,
+                        gh,
+                        clip_rect,
+                        &cursor.color,
+                    );
+                    self.add_rect_clipped(
                         &mut cursor_vertices,
                         gx + gw - 1.0,
                         gy,
                         1.0,
                         gh,
+                        clip_rect,
                         &cursor.color,
                     );
                 }

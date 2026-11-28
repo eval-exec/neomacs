@@ -1417,6 +1417,7 @@ fn materialize_includes_cursors() {
         color: Color::GREEN,
         cursor_fg: Color::WHITE,
         ascent: 12.0,
+        clip_window_id: None,
     });
     let buf = state.materialize();
     assert!(buf.glyphs.is_empty());
@@ -1450,6 +1451,7 @@ fn presented_cursor_for_window_selects_typed_caret_after_decoration() {
         color: Color::RED,
         cursor_fg: Color::WHITE,
         ascent: 12.0,
+        clip_window_id: None,
     });
     state.cursors.push(CursorItem {
         window_id,
@@ -1463,6 +1465,7 @@ fn presented_cursor_for_window_selects_typed_caret_after_decoration() {
         color: Color::BLUE,
         cursor_fg: Color::BLACK,
         ascent: 13.0,
+        clip_window_id: None,
     });
 
     let cursor = state
@@ -1495,6 +1498,7 @@ fn decorative_cursor_paint_round_trips_without_losing_inverse_foreground() {
         cursor_fg: Color::WHITE,
         ascent: 12.0,
         active: false,
+        clip_window_id: None,
     });
 
     let state = FrameDisplayState::from_frame_glyph_buffer(&input);
@@ -2763,6 +2767,7 @@ fn materialize_mixed_grid_and_nongrid_items() {
         color: Color::WHITE,
         cursor_fg: Color::BLACK,
         ascent: 12.0,
+        clip_window_id: None,
     });
 
     let buf = state.materialize();

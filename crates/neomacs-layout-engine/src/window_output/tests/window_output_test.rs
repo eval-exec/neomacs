@@ -1065,6 +1065,7 @@ fn publish_text_window_decorative_cursor_installs_cursor_item_and_effects_only()
         TextWindowOutputTarget::from_builder(&mut builder),
         TextWindowDecorativeCursor {
             window_id: 77,
+            clip_window_id: None,
             slot_id: DisplaySlotId {
                 window_id: neomacs_display_protocol::types::DisplayWindowId::new(77),
                 row: 3,

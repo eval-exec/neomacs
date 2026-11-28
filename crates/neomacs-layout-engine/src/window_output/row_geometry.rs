@@ -294,6 +294,40 @@ impl WindowRowGeometry {
         self.point_for_buffer_pos(pos)
     }
 
+    /// Maximum rendered glyph height on `row` strictly before `pos`, matching
+    /// GNU `it->max_ascent + it->max_descent` at `PT` in `line_bottom_y`
+    /// (`src/xdisp.c:1511-1543`). Returns `None` when `pos` is at BOL (no
+    /// glyphs precede `pos` on `row`).
+    pub(super) fn max_glyph_height_on_row_before_pos(
+        &self,
+        row: i64,
+        pos: LispCharPos1,
+    ) -> Option<i64> {
+        let mut max_h: Option<i64> = None;
+        let mut observe = |point: &DisplayPointSnapshot| {
+            if point.row == row
+                && point.buffer_pos < pos
+                && point.role == neovm_core::window::DisplayPointRole::Glyph
+            {
+                let h = point.height.max(1);
+                max_h = Some(max_h.map_or(h, |cur| cur.max(h)));
+            }
+        };
+        if let Some(frozen) = &self.point_rows {
+            for point_row in &frozen.rows {
+                if point_row.points().next().is_some_and(|p| p.row == row) {
+                    for point in point_row.points() {
+                        observe(&point);
+                    }
+                }
+            }
+        }
+        for point in &self.points {
+            observe(point);
+        }
+        max_h
+    }
+
     pub(super) fn row_metrics(&self) -> &[RowMetricsSnapshot] {
         &self.row_metrics
     }

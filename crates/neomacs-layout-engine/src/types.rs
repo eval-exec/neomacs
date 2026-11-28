@@ -335,6 +335,10 @@ pub struct WindowParams {
     /// mini-window scrolls minimally whatever `scroll-conservatively` says
     /// (GNU passes `SCROLL_LIMIT + 1` for it, src/xdisp.c:21083).
     pub scroll_minibuffer_conservatively: bool,
+    /// `make-cursor-line-fully-visible` (GNU default t, `src/xdisp.c:19310`):
+    /// when nil, `cursor_row_fully_visible_p` returns true and redisplay does
+    /// not scroll a partially visible point row into full view.
+    pub make_cursor_line_fully_visible: bool,
     /// `scroll-margin` resolved through `maximum-scroll-margin`: the minimum
     /// number of lines of context kept between point and the top or bottom
     /// window edge on a minimal scroll (GNU `window_scroll_margin`).

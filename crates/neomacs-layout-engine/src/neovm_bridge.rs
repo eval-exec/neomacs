@@ -1133,6 +1133,17 @@ fn effective_scroll_minibuffer_conservatively(buffer: &Buffer, vars: VariableVie
         .is_none_or(|value| !value.is_nil())
 }
 
+/// GNU `cursor_row_fully_visible_p`'s `make-cursor-line-fully-visible` read
+/// (`src/xdisp.c:19310`) with the window's buffer current (`xdisp.c:20555`);
+/// void keeps the GNU default t.
+fn effective_make_cursor_line_fully_visible(buffer: &Buffer, vars: VariableView<'_>) -> bool {
+    vars.value_in_buffer(
+        Some(buffer),
+        neovm_core::emacs_core::intern::intern("make-cursor-line-fully-visible"),
+    )
+    .is_none_or(|value| !value.is_nil())
+}
+
 fn effective_nobreak_char_display(buffer: &Buffer, vars: VariableView<'_>) -> NobreakDisplayMode {
     // `nobreak-char-display` is a `DEFVAR_LISP`, but GNU reads `Vnobreak_char_display`
     // while displaying buffer text (xdisp.c:8522, with the window's buffer current),
@@ -2375,6 +2386,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     // (xdisp.c:21092/21103), with the window's buffer current (xdisp.c:20555),
     // so a buffer-local binding takes effect.
     let scroll_minibuffer_conservatively = effective_scroll_minibuffer_conservatively(buffer, vars);
+    let make_cursor_line_fully_visible = effective_make_cursor_line_fully_visible(buffer, vars);
     // GNU `window_scroll_margin` (src/window.c:6207) caps `scroll-margin` by
     // `maximum-scroll-margin`, which only counts when it is a float. Resolve
     // both here so every layout consumer sees the same effective margin.
@@ -2558,6 +2570,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         scroll_conservatively,
         scroll_step,
         scroll_minibuffer_conservatively,
+        make_cursor_line_fully_visible,
         scroll_margin,
         tab_stop_list: buffer_local_list_values(buffer, LayoutVar::TabStopList)
             .iter()

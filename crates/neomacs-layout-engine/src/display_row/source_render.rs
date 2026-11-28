@@ -2085,6 +2085,16 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         self.output_render.output_rows()
     }
 
+    pub(crate) fn max_glyph_height_on_row_before_pos(
+        &self,
+        row: i64,
+        pos: neovm_core::buffer::LispCharPos1,
+    ) -> Option<i64> {
+        self.output_render
+            .output_emitter_ref()
+            .max_glyph_height_on_row_before_pos(row, pos)
+    }
+
     pub(crate) fn output_rows_len(&self) -> usize {
         self.output_render.output_rows_len()
     }

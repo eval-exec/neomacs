@@ -1706,8 +1706,8 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
             Color::from_pixel(self.params.cursor_foreground),
         );
         if is_cursor_vertically_clipped(
-            resolved_cursor.y,
-            resolved_cursor.height,
+            row_metric.pixel_y(),
+            row_metric.height(),
             self.text_y,
             self.text_height,
         ) {
@@ -1754,21 +1754,20 @@ impl<'a> CapturedTextWindowCursorPublishContext<'a> {
     }
 }
 
-/// Whether a cursor's vertical span falls completely outside the visible text
-/// area. Normal cursors are clipped if any part extends past the bottom; a
-/// cursor on a row taller than `text_height` (e.g. a large scaled face or tall
-/// image) is visible as long as its top lies within `[text_y, text_y + text_height)`.
+/// Whether a cursor row falls completely outside the visible text area
+/// `[text_y, text_y + text_height)`.
+///
+/// Mirrors GNU `set_cursor_from_row` (`src/xdisp.c:35208`,
+/// `MATRIX_ROW_BOTTOM_Y (row) > 0 && row->y < WINDOW_BOX_TEXT_HEIGHT (w)`):
+/// a cursor is published whenever its row vertically overlaps the text area
+/// (including mixed-height tall rows where the glyph under point is shorter
+/// than the row, and top-vscrolled rows where `row_y < text_y` while the row
+/// extends into the text area). Actual painting is clipped to `text_body` at
+/// the renderer (`x_clip_to_row`).
 #[inline]
 fn is_cursor_vertically_clipped(y: f32, height: f32, text_y: f32, text_height: f32) -> bool {
     let text_bottom = text_y + text_height;
-    if y < text_y {
-        return true;
-    }
-    if height > text_height {
-        y >= text_bottom
-    } else {
-        y + height > text_bottom
-    }
+    y + height <= text_y || y >= text_bottom
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1859,6 +1858,7 @@ impl<'a> VisualTextWindowCursorPublishContext<'a> {
                 output.reborrow(),
                 TextWindowDecorativeCursor {
                     window_id: resolved_cursor.window_id(),
+                    clip_window_id: Some(DisplayWindowId::new(self.params.window_id)),
                     slot_id: resolved_cursor.slot_id,
                     x: resolved_cursor.x,
                     y: resolved_cursor.y,

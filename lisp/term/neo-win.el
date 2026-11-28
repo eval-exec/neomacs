@@ -240,9 +240,13 @@ reads its post-set value."
   ;; the render thread and suppress the Emacs-side blink timer.
   (neomacs--setup-cursor-blink)
 
-  ;; Enable pixel-precise scrolling for smooth touchpad support.
+  ;; Enable pixel-precise scrolling for smooth touchpad support while
+  ;; preserving `make-cursor-line-fully-visible' (GNU default t) so
+  ;; `-Q' matches GNU Emacs cursor-row scrolling semantics.
   (when (fboundp 'pixel-scroll-precision-mode)
-    (pixel-scroll-precision-mode 1)))
+    (let ((saved (default-value 'make-cursor-line-fully-visible)))
+      (pixel-scroll-precision-mode 1)
+      (setq-default make-cursor-line-fully-visible saved))))
 
 ;; Do the actual window system setup here.
 (cl-defmethod window-system-initialization (&context (window-system neo)

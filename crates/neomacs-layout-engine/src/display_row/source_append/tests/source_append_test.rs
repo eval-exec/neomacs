@@ -11805,6 +11805,7 @@ fn test_display_space_window_params() -> WindowParams {
         scroll_conservatively: 0,
         scroll_step: 0,
         scroll_minibuffer_conservatively: true,
+        make_cursor_line_fully_visible: true,
         scroll_margin: neovm_core::window::ScrollMargin::default(),
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,

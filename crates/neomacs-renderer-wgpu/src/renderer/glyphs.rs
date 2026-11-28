@@ -1106,10 +1106,121 @@ impl WgpuRenderer {
         }
     }
 
+    /// Intersect a cursor rectangle with an optional clip region (`text_body`).
+    pub(super) fn clip_rect_to_bounds(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        clip: Option<Rect>,
+    ) -> Option<(f32, f32, f32, f32)> {
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let Some(clip) = clip else {
+            return Some((x, y, width, height));
+        };
+        let x0 = x.max(clip.x);
+        let y0 = y.max(clip.y);
+        let x1 = (x + width).min(clip.x + clip.width);
+        let y1 = (y + height).min(clip.y + clip.height);
+        let cw = x1 - x0;
+        let ch = y1 - y0;
+        (cw > 0.0 && ch > 0.0).then_some((x0, y0, cw, ch))
+    }
+
+    /// Clamp an animated cursor quad to an optional clip region (`text_body`),
+    /// returning `None` if the clamped polygon collapses to empty area.
+    pub(super) fn clip_quad_to_bounds(
+        corners: &[(f32, f32); 4],
+        clip: Option<Rect>,
+    ) -> Option<[(f32, f32); 4]> {
+        let Some(clip) = clip else {
+            return Some(*corners);
+        };
+        let max_x = clip.x + clip.width;
+        let max_y = clip.y + clip.height;
+        let mut min_cx = f32::INFINITY;
+        let mut max_cx = f32::NEG_INFINITY;
+        let mut min_cy = f32::INFINITY;
+        let mut max_cy = f32::NEG_INFINITY;
+        let mut clamped = [(0.0f32, 0.0f32); 4];
+        for (i, &(x, y)) in corners.iter().enumerate() {
+            let cx = x.clamp(clip.x, max_x);
+            let cy = y.clamp(clip.y, max_y);
+            min_cx = min_cx.min(cx);
+            max_cx = max_cx.max(cx);
+            min_cy = min_cy.min(cy);
+            max_cy = max_cy.max(cy);
+            clamped[i] = (cx, cy);
+        }
+        (max_cx > min_cx && max_cy > min_cy).then_some(clamped)
+    }
+
+    /// Look up the window's `text_body` clip rectangle for cursor painting
+    /// (GNU `x_clip_to_row` / text-area clip, so a tall or top-vscrolled cursor
+    /// cannot paint over the mode line, header line, or adjacent windows).
+    pub(super) fn cursor_text_body_clip(
+        frame_glyphs: &FrameGlyphBuffer,
+        window_id: DisplayWindowId,
+        offset_x: f32,
+        offset_y: f32,
+    ) -> Option<Rect> {
+        frame_glyphs
+            .window_infos
+            .iter()
+            .find(|info| info.window_id == window_id)
+            .and_then(|info| match info.geometry {
+                neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+                    regions,
+                    ..
+                } => Some(regions.text_body),
+                _ => None,
+            })
+            .filter(|body| body.width > 0.0 && body.height > 0.0)
+            .map(|body| {
+                Rect::new(
+                    body.x + offset_x,
+                    body.y + offset_y,
+                    body.width,
+                    body.height,
+                )
+            })
+    }
+
+    pub(super) fn add_rect_clipped(
+        &self,
+        vertices: &mut Vec<RectVertex>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        clip: Option<Rect>,
+        color: &Color,
+    ) {
+        if let Some((cx, cy, cw, ch)) = Self::clip_rect_to_bounds(x, y, width, height, clip) {
+            self.add_rect(vertices, cx, cy, cw, ch, color);
+        }
+    }
+
+    pub(super) fn add_quad_clipped(
+        &self,
+        vertices: &mut Vec<RectVertex>,
+        corners: &[(f32, f32); 4],
+        clip: Option<Rect>,
+        color: &Color,
+    ) {
+        if let Some(clamped) = Self::clip_quad_to_bounds(corners, clip) {
+            self.add_quad(vertices, &clamped, color);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_cursor_visual(
         &mut self,
         window_id: DisplayWindowId,
         static_rect: (f32, f32, f32, f32),
+        clip_rect: Option<Rect>,
         slot_id: DisplaySlotId,
         style: CursorStyle,
         color: &Color,
@@ -1155,7 +1266,15 @@ impl WgpuRenderer {
                         } else {
                             (rect.x, rect.y, rect.width, rect.height)
                         };
-                        self.add_rect(cursor_bg_vertices, x, y, width, height, effective_color);
+                        self.add_rect_clipped(
+                            cursor_bg_vertices,
+                            x,
+                            y,
+                            width,
+                            height,
+                            clip_rect,
+                            effective_color,
+                        );
                     }
                     FilledBoxPresentation::InFlight { shape, .. } => match shape {
                         CursorShape::Rect(rect) => {
@@ -1164,18 +1283,22 @@ impl WgpuRenderer {
                             } else {
                                 (rect.x, rect.y, rect.width, rect.height)
                             };
-                            self.add_rect(
+                            self.add_rect_clipped(
                                 behind_text_cursor_vertices,
                                 x,
                                 y,
                                 width,
                                 height,
+                                clip_rect,
                                 effective_color,
                             );
                         }
-                        CursorShape::Quad(corners) => {
-                            self.add_quad(behind_text_cursor_vertices, &corners, effective_color)
-                        }
+                        CursorShape::Quad(corners) => self.add_quad_clipped(
+                            behind_text_cursor_vertices,
+                            &corners,
+                            clip_rect,
+                            effective_color,
+                        ),
                     },
                 }
             }
@@ -1191,7 +1314,7 @@ impl WgpuRenderer {
                 && let Some(corners) = anim.corners.as_ref()
                 && cursor_visible
             {
-                self.add_quad(cursor_vertices, corners, effective_color);
+                self.add_quad_clipped(cursor_vertices, corners, clip_rect, effective_color);
             }
             return;
         }
@@ -1206,35 +1329,76 @@ impl WgpuRenderer {
                 let bar_w = CursorStyle::bar_paint_width(bar_w, cw);
                 if wake_active {
                     let (sx, sy, sw, sh) = Self::scale_rect(cx, cy, bar_w, ch, wake);
-                    self.add_rect(cursor_vertices, sx, sy, sw, sh, effective_color);
+                    self.add_rect_clipped(
+                        cursor_vertices,
+                        sx,
+                        sy,
+                        sw,
+                        sh,
+                        clip_rect,
+                        effective_color,
+                    );
                 } else {
-                    self.add_rect(cursor_vertices, cx, cy, bar_w, ch, effective_color);
+                    self.add_rect_clipped(
+                        cursor_vertices,
+                        cx,
+                        cy,
+                        bar_w,
+                        ch,
+                        clip_rect,
+                        effective_color,
+                    );
                 }
             }
             CursorStyle::Hbar(hbar_h) => {
                 let cw = CursorStyle::hbar_paint_width(cw);
                 if wake_active {
                     let (sx, sy, sw, sh) = Self::scale_rect(cx, cy + ch - hbar_h, cw, hbar_h, wake);
-                    self.add_rect(cursor_vertices, sx, sy, sw, sh, effective_color);
+                    self.add_rect_clipped(
+                        cursor_vertices,
+                        sx,
+                        sy,
+                        sw,
+                        sh,
+                        clip_rect,
+                        effective_color,
+                    );
                 } else {
-                    self.add_rect(
+                    self.add_rect_clipped(
                         cursor_vertices,
                         cx,
                         cy + ch - hbar_h,
                         cw,
                         hbar_h,
+                        clip_rect,
                         effective_color,
                     );
                 }
             }
             CursorStyle::Hollow => {
-                self.add_rect(cursor_vertices, cx, cy, cw, 1.0, effective_color);
-                self.add_rect(cursor_vertices, cx, cy + ch - 1.0, cw, 1.0, effective_color);
-                self.add_rect(cursor_vertices, cx, cy, 1.0, ch, effective_color);
-                self.add_rect(cursor_vertices, cx + cw - 1.0, cy, 1.0, ch, effective_color);
+                self.add_rect_clipped(cursor_vertices, cx, cy, cw, 1.0, clip_rect, effective_color);
+                self.add_rect_clipped(
+                    cursor_vertices,
+                    cx,
+                    cy + ch - 1.0,
+                    cw,
+                    1.0,
+                    clip_rect,
+                    effective_color,
+                );
+                self.add_rect_clipped(cursor_vertices, cx, cy, 1.0, ch, clip_rect, effective_color);
+                self.add_rect_clipped(
+                    cursor_vertices,
+                    cx + cw - 1.0,
+                    cy,
+                    1.0,
+                    ch,
+                    clip_rect,
+                    effective_color,
+                );
             }
             CursorStyle::FilledBox => {
-                self.add_rect(cursor_vertices, cx, cy, cw, ch, effective_color);
+                self.add_rect_clipped(cursor_vertices, cx, cy, cw, ch, clip_rect, effective_color);
             }
         }
     }

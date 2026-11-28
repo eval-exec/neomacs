@@ -20,6 +20,7 @@ fn filled_box_frame(effects: EffectsConfig) -> (FrameGlyphBuffer, DisplayWindowI
         cursor_fg: Color::BLACK,
         ascent: 0.0,
         active: true,
+        clip_window_id: None,
     });
     frame.set_window_cursor_effects(window_id, effects);
     (frame, window_id)
@@ -45,6 +46,7 @@ fn a_hovered_or_pressed_pointer_appearance_forces_the_full_render_and_retains_no
         cursor_fg: Color::BLACK,
         ascent: 0.0,
         active: true,
+        clip_window_id: None,
     });
     assert!(super::pointer_appearance_allowed(&pointer));
     assert_eq!(
@@ -303,6 +305,7 @@ fn filled_box_scene_frame(w: f32, h: f32, presentation: u64) -> FrameGlyphBuffer
         cursor_fg: Color::rgb(0.05, 0.05, 0.05),
         ascent: 14.0,
         active: true,
+        clip_window_id: None,
     });
     frame
 }
@@ -768,5 +771,418 @@ fn retained_static_draw_coalesces_composite_to_single_queue_submit() {
             diff <= 2,
             "{label}: coalesced composite pixels must match full render, max_diff={diff}"
         );
+    }
+}
+
+/// Helper: count bright-magenta cursor pixels inside vs outside `clip_y_top..clip_y_bottom`.
+fn count_magenta_cursor_pixels(
+    pixels: &[u8],
+    w: u32,
+    h: u32,
+    clip_y_top: u32,
+    clip_y_bottom: u32,
+) -> (usize, usize, usize) {
+    let mut inside = 0usize;
+    let mut leaked_above = 0usize;
+    let mut leaked_below = 0usize;
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let [r, g, b, _a] = [
+                pixels[idx],
+                pixels[idx + 1],
+                pixels[idx + 2],
+                pixels[idx + 3],
+            ];
+            if r >= 0xe0 && g <= 0x20 && b >= 0xe0 {
+                if y < clip_y_top {
+                    leaked_above += 1;
+                } else if y >= clip_y_bottom {
+                    leaked_below += 1;
+                } else {
+                    inside += 1;
+                }
+            }
+        }
+    }
+    (inside, leaked_above, leaked_below)
+}
+
+fn tall_cursor_window_info(
+    window_id: DisplayWindowId,
+    frame_w: f32,
+    body_top: f32,
+    body_h: f32,
+) -> neomacs_display_protocol::frame_glyphs::WindowInfo {
+    use neomacs_display_protocol::frame_glyphs::{
+        PresentedCellOrigin, PresentedWindowGeometry, PresentedWindowRegions, WindowInfo,
+    };
+    use neomacs_display_protocol::types::Rect;
+    let outer = Rect::new(0.0, 0.0, frame_w, body_top + body_h + 17.0);
+    let text_body = Rect::new(8.0, body_top, frame_w - 16.0, body_h);
+    WindowInfo {
+        window_id,
+        buffer_id: 1,
+        window_start: 1,
+        window_end: 100,
+        buffer_size: 100,
+        buffer_modiff: Default::default(),
+        bounds: outer,
+        geometry: PresentedWindowGeometry::Complete {
+            cell_origin: PresentedCellOrigin::default(),
+            regions: PresentedWindowRegions {
+                outer,
+                text_body,
+                header_line: (body_top > 0.0).then(|| Rect::new(0.0, 0.0, frame_w, body_top)),
+                mode_line: Some(Rect::new(0.0, body_top + body_h, frame_w, 17.0)),
+                ..PresentedWindowRegions::default()
+            },
+        },
+        line_number_field: None,
+        mode_line_height: 17.0,
+        header_line_height: body_top,
+        tab_line_height: 0.0,
+        selected: true,
+        is_minibuffer: false,
+        char_height: 17.0,
+        buffer_name: String::new(),
+        buffer_file_name: String::new(),
+        modified: false,
+    }
+}
+
+/// R2-1 (#861): `build_filled_box_cursor_cells` + `composite_retained_scene_with_cursor`
+/// must clip overflowing tall `FilledBox` cursors (bottom-overflow, top-vscroll, and
+/// decorative visual cursors) strictly to the owning window's `text_body`, matching the
+/// full render bit-for-bit with zero cursor pixels over the header line, mode line, or
+/// lower split window.
+#[test]
+fn tall_filled_box_cursor_clips_to_text_body_on_retained_static_composite() {
+    use super::super::{FrameDrawInputs, NativeDrawContext};
+    use crate::render_thread::frame_sched::RenderWork;
+    use crate::render_thread::frame_windows::GuiFrameRenderState;
+    use crate::render_thread::state::{ChildFrameStyle, ToolbarResources, WindowChrome};
+    use neomacs_display_protocol::types::DisplayFrameId;
+    use neomacs_renderer_wgpu::WgpuRenderer;
+
+    const W: u32 = 160;
+    const H: u32 = 120;
+    const BODY_TOP: u32 = 17;
+    const BODY_H: u32 = 60;
+    const BODY_BOTTOM: u32 = BODY_TOP + BODY_H;
+
+    let mut renderer = WgpuRenderer::new(None, W, H).expect("real GPU required");
+    renderer.effects.cursor_color_cycle.enabled = false;
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let wid = DisplayWindowId::new(1);
+    let pointer = PointerAppearanceState::default();
+
+    let cases: [(
+        &str,
+        DisplayWindowId,
+        Option<DisplayWindowId>,
+        f32,
+        f32,
+        bool,
+    ); 3] = [
+        ("bottom-overflow", wid, None, 45.0, 90.0, true),
+        (
+            "top-vscroll-and-bottom-overflow",
+            wid,
+            None,
+            -10.0,
+            100.0,
+            true,
+        ),
+        (
+            "decorative-bottom-overflow",
+            DisplayWindowId::new(-1_000_000),
+            Some(wid),
+            45.0,
+            90.0,
+            false,
+        ),
+    ];
+
+    for (idx, (label, cursor_wid, clip_wid, cy, ch, active)) in cases.into_iter().enumerate() {
+        let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+        frame.presentation_id = PresentationId::new(400 + idx as u64);
+        frame.set_frame_identity(
+            DisplayFrameId::new(42),
+            DisplayFrameId::new(0),
+            0.0,
+            0.0,
+            i32::MIN,
+            false,
+            0.0,
+            Color::rgb(0.95, 0.95, 0.95),
+            false,
+            1.0,
+        );
+        frame.background = Color::rgb(0.95, 0.95, 0.95);
+        frame.font_pixel_size = 14.0;
+        frame.char_height = 17.0;
+        frame.window_infos.push(tall_cursor_window_info(
+            wid,
+            W as f32,
+            BODY_TOP as f32,
+            BODY_H as f32,
+        ));
+        frame.window_cursors.push(WindowCursor {
+            window_id: cursor_wid,
+            slot_id: DisplaySlotId {
+                window_id: cursor_wid,
+                row: 0,
+                col: 0,
+            },
+            x: 8.0,
+            y: cy,
+            width: 24.0,
+            height: ch,
+            style: CursorStyle::FilledBox,
+            color: Color::rgb(1.0, 0.0, 1.0),
+            cursor_fg: Color::BLACK,
+            ascent: 0.0,
+            active,
+            clip_window_id: clip_wid,
+        });
+
+        let cells = super::build_filled_box_cursor_cells(&frame, 1.0, &pointer);
+        assert_eq!(cells.len(), 1, "{label}: expected 1 filled-box cursor cell");
+        assert_eq!(
+            cells[0].mini.window_infos.len(),
+            1,
+            "{label}: mini-frame must carry owning WindowInfo for cursor_text_body_clip"
+        );
+        let (_, sy, _, sh) = cells[0].scissor;
+        assert!(
+            sy >= BODY_TOP && sy + sh <= BODY_BOTTOM,
+            "{label}: cell scissor y={sy}..{} must stay within text_body {BODY_TOP}..{BODY_BOTTOM}",
+            sy + sh
+        );
+
+        let mut render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, now);
+        render.set_current_frame(
+            Some(frame.clone()),
+            None,
+            Default::default(),
+            Default::default(),
+        );
+        render.begin_presentable_render(RenderWork::RebuildScene);
+        let chrome = WindowChrome::default();
+        let native = NativeDrawContext {
+            content_size: (W, H),
+            scale_factor: 1.0,
+            chrome: &chrome,
+        };
+        let child_style = ChildFrameStyle::default();
+        let toolbar = ToolbarResources::default();
+        let mapping = gpu_mapping(&frame, W, H);
+        let inputs = FrameDrawInputs {
+            present_mapping: mapping,
+            root_animated_cursor: None,
+            animated_cursor: None,
+            bg_gradient: None,
+            child_frame_style: &child_style,
+            scroll_indicators_enabled: false,
+            retain_scroll_body: true,
+            toolbar: &toolbar,
+        };
+
+        // First draw warms the cursorless retained_static scene + clipped cursor cells;
+        // second draw takes the coalesced CompositeOnly path (Phase 3).
+        let target = gpu_test_target(&renderer, W, H);
+        let target_view = target.create_view(&Default::default());
+        super::draw(
+            &mut renderer,
+            native,
+            &mut render,
+            &target_view,
+            &frame,
+            &inputs,
+            true,
+            None,
+        )
+        .expect("warm retained_static");
+        super::draw(
+            &mut renderer,
+            native,
+            &mut render,
+            &target_view,
+            &frame,
+            &inputs,
+            true,
+            None,
+        )
+        .expect("composite-only retained_static");
+
+        let comp_pixels = gpu_read_pixels(&renderer, &target, W, H);
+        let (inside, leaked_above, leaked_below) =
+            count_magenta_cursor_pixels(&comp_pixels, W, H, BODY_TOP, BODY_BOTTOM);
+        assert!(
+            inside > 0,
+            "{label}: expected cursor pixels inside text_body"
+        );
+        assert_eq!(
+            leaked_above, 0,
+            "{label}: composite leaked {leaked_above} cursor pixels above text_body"
+        );
+        assert_eq!(
+            leaked_below, 0,
+            "{label}: composite leaked {leaked_below} cursor pixels below text_body"
+        );
+
+        let ref_tex = gpu_test_target(&renderer, W, H);
+        let ref_view = ref_tex.create_view(&Default::default());
+        renderer.render_frame_glyphs(
+            &ref_view,
+            &frame,
+            render.compositor.glyph_atlas.as_mut().unwrap(),
+            mapping,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let full_pixels = gpu_read_pixels(&renderer, &ref_tex, W, H);
+        let diff = max_channel_diff(&comp_pixels, &full_pixels);
+        assert!(
+            diff <= 2,
+            "{label}: retained_static composite must match full render bit-for-bit, max_diff={diff}"
+        );
+    }
+}
+
+/// R2-2 & R2-3 (#861): real GPU render readback proves all four cursor shapes
+/// (`FilledBox`, `Bar`, `Hbar`, `Hollow`) clip strictly to `text_body` for both
+/// regular window cursors and decorative `neomacs-visual-cursors` (synthetic
+/// negative `window_id` carrying `clip_window_id`).
+#[test]
+fn all_four_cursor_shapes_and_decorative_cursors_clip_to_text_body_on_gpu() {
+    use neomacs_display_protocol::types::DisplayFrameId;
+    use neomacs_renderer_wgpu::WgpuRenderer;
+
+    const W: u32 = 160;
+    const H: u32 = 120;
+    const BODY_TOP: u32 = 17;
+    const BODY_H: u32 = 60;
+    const BODY_BOTTOM: u32 = BODY_TOP + BODY_H;
+
+    let mut renderer = WgpuRenderer::new(None, W, H).expect("real GPU required");
+    renderer.effects.cursor_color_cycle.enabled = false;
+    let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new(renderer.device());
+    let wid = DisplayWindowId::new(1);
+
+    let shapes = [
+        (
+            "filled-box",
+            CursorStyle::FilledBox,
+            45.0_f32,
+            90.0_f32,
+            true,
+        ),
+        ("bar", CursorStyle::Bar(3.0), 45.0, 90.0, true),
+        // Bottom-overflowing Hbar sits entirely below BODY_BOTTOM and must clip out (0 inside, 0 leaked).
+        ("hbar-overflow", CursorStyle::Hbar(4.0), 45.0, 90.0, false),
+        // Top-vscrolled tall Hbar whose bottom rests inside BODY_TOP..BODY_BOTTOM draws inside with 0 leaks.
+        (
+            "hbar-vscroll-in-body",
+            CursorStyle::Hbar(4.0),
+            -10.0,
+            70.0,
+            true,
+        ),
+        ("hollow", CursorStyle::Hollow, 45.0, 90.0, true),
+        (
+            "hollow-top-vscroll",
+            CursorStyle::Hollow,
+            -10.0,
+            100.0,
+            true,
+        ),
+    ];
+
+    for (owner_label, cursor_wid, clip_wid, active) in [
+        ("window-cursor", wid, None, true),
+        (
+            "decorative-cursor",
+            DisplayWindowId::new(-1_000_000),
+            Some(wid),
+            false,
+        ),
+    ] {
+        for (shape_label, style, cy, ch, expect_inside) in shapes {
+            let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+            frame.presentation_id = PresentationId::new(500);
+            frame.set_frame_identity(
+                DisplayFrameId::new(42),
+                DisplayFrameId::new(0),
+                0.0,
+                0.0,
+                i32::MIN,
+                false,
+                0.0,
+                Color::rgb(0.95, 0.95, 0.95),
+                false,
+                1.0,
+            );
+            frame.background = Color::rgb(0.95, 0.95, 0.95);
+            frame.font_pixel_size = 14.0;
+            frame.char_height = 17.0;
+            frame.window_infos.push(tall_cursor_window_info(
+                wid,
+                W as f32,
+                BODY_TOP as f32,
+                BODY_H as f32,
+            ));
+            frame.window_cursors.push(WindowCursor {
+                window_id: cursor_wid,
+                slot_id: DisplaySlotId {
+                    window_id: cursor_wid,
+                    row: 0,
+                    col: 0,
+                },
+                x: 16.0,
+                y: cy,
+                width: 24.0,
+                height: ch,
+                style,
+                color: Color::rgb(1.0, 0.0, 1.0),
+                cursor_fg: Color::BLACK,
+                ascent: 0.0,
+                active,
+                clip_window_id: clip_wid,
+            });
+            let mapping = gpu_mapping(&frame, W, H);
+            let tex = gpu_test_target(&renderer, W, H);
+            let view = tex.create_view(&Default::default());
+            renderer.render_frame_glyphs(
+                &view, &frame, &mut atlas, mapping, true, None, None, None, None, None,
+            );
+            let pixels = gpu_read_pixels(&renderer, &tex, W, H);
+            let (inside, leaked_above, leaked_below) =
+                count_magenta_cursor_pixels(&pixels, W, H, BODY_TOP, BODY_BOTTOM);
+            if expect_inside {
+                assert!(
+                    inside > 0,
+                    "{owner_label}/{shape_label}: expected cursor pixels inside text_body"
+                );
+            } else {
+                assert_eq!(
+                    inside, 0,
+                    "{owner_label}/{shape_label}: bottom-overflowing hbar should clip completely"
+                );
+            }
+            assert_eq!(
+                leaked_above, 0,
+                "{owner_label}/{shape_label}: leaked {leaked_above} pixels above text_body"
+            );
+            assert_eq!(
+                leaked_below, 0,
+                "{owner_label}/{shape_label}: leaked {leaked_below} pixels below text_body"
+            );
+        }
     }
 }

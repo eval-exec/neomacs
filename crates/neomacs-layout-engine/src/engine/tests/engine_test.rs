@@ -1961,6 +1961,7 @@ fn test_window_params() -> WindowParams {
         scroll_conservatively: 0,
         scroll_step: 0,
         scroll_minibuffer_conservatively: true,
+        make_cursor_line_fully_visible: true,
         scroll_margin: neovm_core::window::ScrollMargin::default(),
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
@@ -15037,6 +15038,11 @@ fn layout_frame_rust_emits_neomacs_visual_cursors_without_moving_phys_cursor() {
 
     let frame = eval.frame_manager().get(frame_id).expect("frame");
     let selected_window = frame.selected_window;
+    assert_eq!(
+        visual.clip_window_id,
+        Some(DisplayWindowId::new(selected_window.0 as i64)),
+        "decorative visual cursor must clip to its owning window's text_body"
+    );
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");

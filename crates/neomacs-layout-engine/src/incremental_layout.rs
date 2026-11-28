@@ -695,6 +695,12 @@ pub struct CursorOnlyReplay {
     /// Original complete-source evidence, refreshed by the engine at consumption.
     pub(crate) ordinary_cursor_source:
         Option<crate::cursor_source_dependencies::OrdinaryCursorSourceProof>,
+    /// Layout `window_start` (0-based, matching `WindowParams::window_start`)
+    /// that `body_rows` was built for. Preserving this start keeps an accepted
+    /// cursor-only replay (including GNU opt-2 horizontal motion on a tall
+    /// cursor row at vpos 0) and a Phase-A resolved `prepared_viewports` hit
+    /// aligned with their replayed rows.
+    pub(crate) window_start: i64,
     /// Sealed frame-face generation that owns every ID in `body_rows`.
     pub(crate) face_generation: FrameFaceGeneration,
 }
@@ -1482,12 +1488,16 @@ impl RetainedWindowMatrix {
     }
 
     /// Whether only point changed since this valid retained matrix was built
-    /// (GNU `try_cursor_movement` entry condition, `src/xdisp.c:20098-20118`).
-    /// Used by the full-walk fallback when cursor-only replay declines so tall
-    /// partially visible point rows receive GNU's `temp_scroll_step` flag.
+    /// (GNU `try_cursor_movement` entry condition, `src/xdisp.c:19880-19885,
+    /// 20098-20118`). Used by the full-walk fallback when cursor-only replay
+    /// declines so tall partially visible point rows receive GNU's
+    /// `temp_scroll_step` flag.
     pub(crate) fn is_cursor_movement_eligible(&self, curr: &RetainedWindowKey) -> bool {
         self.validity == MatrixValidity::Valid
             && self.key.point != curr.point
+            && !curr.show_trailing_whitespace
+            && curr.display_line_numbers.point_motion_body_dependency()
+                != PointMotionBodyDependency::EntireWindow
             && WindowDelta::between(&self.key, curr).only_point_moved_at_most()
     }
 
@@ -1637,43 +1647,69 @@ impl RetainedWindowMatrix {
             && cursor_top + cursor_row.height_px <= body.y + body.height;
         if point_moved && !forced_visible {
             let cursor_row_taller_than_body = cursor_row.height_px > body.height;
+            let cursor_row_exact_body_height =
+                !cursor_row_taller_than_body && cursor_row.height_px >= body.height;
             let cursor_row_overflows_bottom =
                 cursor_top + cursor_row.height_px > body.y + body.height + 0.5;
             let same_retained_cursor_row = retained_cursor_row_index == Some(new_cursor_row_index);
 
-            // GNU `try_cursor_movement` (src/xdisp.c:20098-20118) declines when
+            // GNU `try_cursor_movement` (src/xdisp.c:20098-20125) declines when
             // point moves onto a partially visible row taller than the window
             // (even at ZV), letting `try_scrolling` / `recenter:` pick the new
-            // start. Horizontal motion within the same already-displayed tall
-            // row stays on the fast path (GNU `redisplay_internal` opt 2,
-            // src/xdisp.c:17774-17820) without re-scrolling.
+            // start. An exact-height row (`row.height == body.height`) passes
+            // `cursor_row_fully_visible_p(w, false, ...)` without scrolling.
+            // Horizontal motion within the same already-displayed tall row stays
+            // on the fast path (GNU `redisplay_internal` opt 2,
+            // src/xdisp.c:17774-17820) without re-scrolling, even at vpos 0 or
+            // with `scroll-margin > 0`.
             if cursor_row_taller_than_body {
                 if !same_retained_cursor_row
                     && cursor_row_overflows_bottom
-                    && cursor_body_row.is_some_and(|row| row > 0)
+                    && new_cursor_row_index > 0
                 {
                     return Err(CursorOnlyDecline::PointMoveMayScrollDown);
                 }
-            } else if Some(new_cursor_row_index) == last_body_index && !cursor_row.ends_at_zv {
-                // The body's boundary rows keep their original, more
-                // conservative treatment: a move onto the last row may expose a
-                // clipped cursor row that a full pass would scroll into view even
-                // with no margin at all.
-                return Err(CursorOnlyDecline::PointMoveMayScrollDown);
-            }
-            if Some(new_cursor_row_index) == first_body_index && !window_at_buffer_top {
-                return Err(CursorOnlyDecline::PointMoveMayScrollUp);
-            }
-            // Inside the window, GNU still scrolls when point enters the
-            // margin even though the row is on screen (try_window's
-            // `w->cursor.y > last_visible_y - margin - 1` test,
-            // src/xdisp.c:21702).
-            if let Some(cursor_body_row) = cursor_body_row {
-                if cursor_body_row > last_usable_row && !cursor_row.ends_at_zv {
+                if !same_retained_cursor_row {
+                    if Some(new_cursor_row_index) == first_body_index && !window_at_buffer_top {
+                        return Err(CursorOnlyDecline::PointMoveMayScrollUp);
+                    }
+                    if let Some(cursor_body_row) = cursor_body_row {
+                        if cursor_body_row > last_usable_row && !cursor_row.ends_at_zv {
+                            return Err(CursorOnlyDecline::PointMoveMayScrollDown);
+                        }
+                        if cursor_body_row < scroll_margin && !window_at_buffer_top {
+                            return Err(CursorOnlyDecline::PointMoveMayScrollUp);
+                        }
+                    }
+                }
+            } else {
+                if !cursor_row_exact_body_height
+                    && Some(new_cursor_row_index) == last_body_index
+                    && !cursor_row.ends_at_zv
+                {
+                    // The body's boundary rows keep their original, more
+                    // conservative treatment: a move onto the last row may expose a
+                    // clipped cursor row that a full pass would scroll into view even
+                    // with no margin at all.
                     return Err(CursorOnlyDecline::PointMoveMayScrollDown);
                 }
-                if cursor_body_row < scroll_margin && !window_at_buffer_top {
+                if Some(new_cursor_row_index) == first_body_index && !window_at_buffer_top {
                     return Err(CursorOnlyDecline::PointMoveMayScrollUp);
+                }
+                // Inside the window, GNU still scrolls when point enters the
+                // margin even though the row is on screen (try_window's
+                // `w->cursor.y > last_visible_y - margin - 1` test,
+                // src/xdisp.c:21702).
+                if let Some(cursor_body_row) = cursor_body_row {
+                    if !cursor_row_exact_body_height
+                        && cursor_body_row > last_usable_row
+                        && !cursor_row.ends_at_zv
+                    {
+                        return Err(CursorOnlyDecline::PointMoveMayScrollDown);
+                    }
+                    if cursor_body_row < scroll_margin && !window_at_buffer_top {
+                        return Err(CursorOnlyDecline::PointMoveMayScrollUp);
+                    }
                 }
             }
         }
@@ -1709,6 +1745,7 @@ impl RetainedWindowMatrix {
                     })
             },
             ordinary_cursor_source: None,
+            window_start: self.key.window_start,
             face_generation: self.face_generation,
         })
     }

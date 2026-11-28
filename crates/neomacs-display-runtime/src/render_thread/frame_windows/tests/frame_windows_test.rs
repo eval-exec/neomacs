@@ -1244,6 +1244,7 @@ fn frame_render_state_applies_visual_cursor_animation_rects() {
         cursor_fg: Color::BLACK,
         ascent: 0.0,
         active: false,
+        clip_window_id: None,
     });
     render.compositor.current_frame = Some(frame);
     let mut visual = crate::render_thread::cursor::CursorState::new(

@@ -2092,6 +2092,10 @@ pub struct CursorItem {
     /// one row too low when this is dropped to 0.
     #[serde(default)]
     pub ascent: f32,
+    /// Optional owning window whose `text_body` clips this cursor when
+    /// `window_id` is a synthetic decorative-cursor identifier.
+    #[serde(default)]
+    pub clip_window_id: Option<DisplayWindowId>,
 }
 
 /// A scroll bar.
@@ -2865,6 +2869,7 @@ impl FrameDisplayState {
                     color: cursor.color,
                     cursor_fg: cursor.cursor_fg,
                     ascent: cursor.ascent,
+                    clip_window_id: cursor.clip_window_id,
                 }),
         );
 
@@ -3069,6 +3074,7 @@ impl FrameDisplayState {
                 // non-selected window's cursor one text row too low.
                 ascent: cursor.ascent,
                 active: false,
+                clip_window_id: cursor.clip_window_id,
             });
         }
         buf.cursor_effects_by_window = self.cursor_effects_by_window.clone();

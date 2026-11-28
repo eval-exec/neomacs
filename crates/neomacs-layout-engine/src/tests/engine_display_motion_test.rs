@@ -3942,10 +3942,21 @@ fn tall_partially_visible_point_row_follows_gnu_scroll_and_publishes_cursor() {
     );
     assert!(cursor_edit_l2, "edit-l2 must still publish phys_cursor");
 
-    // Tall line 5 under scroll-conservatively=101: scrolls to line 5.
-    let (start_sc101, cursor_sc101) = run_case(101, 0, 5, 0, false);
-    assert_eq!(start_sc101, 5, "sc101-l5 must scroll to line 5");
-    assert!(cursor_sc101, "sc101-l5 must publish phys_cursor");
+    // Tall line 5 under scroll-conservatively=101: iter 0 advances 1->2,
+    // iter 1 advances 2->4, iter 2 has to_y < 0 so persistent dy=2*line_h
+    // overshoots past line 5 into recenter:, keeping line 1 (GNU 31.1 attested).
+    let (start_sc101_l5, cursor_sc101_l5) = run_case(101, 0, 5, 0, false);
+    assert_eq!(
+        start_sc101_l5, 1,
+        "sc101-l5 overshoots past line 5 into recenter: and keeps line 1"
+    );
+    assert!(cursor_sc101_l5, "sc101-l5 must publish phys_cursor");
+
+    // Tall line 6 under scroll-conservatively=101: iter 0 (1->2), iter 1 (2->4),
+    // iter 2 persistent dy=2*line_h lands exactly on line 6 (GNU 31.1 attested).
+    let (start_sc101_l6, cursor_sc101_l6) = run_case(101, 0, 6, 0, false);
+    assert_eq!(start_sc101_l6, 6, "sc101-l6 must scroll to line 6");
+    assert!(cursor_sc101_l6, "sc101-l6 must publish phys_cursor");
 
     // Tall line 5 under default policy (sc=0, ss=0): try_scrolling fails at
     // extra=1, falls through to recenter (moves start forward past line 1).

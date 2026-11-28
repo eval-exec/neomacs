@@ -3770,6 +3770,7 @@ impl LayoutEngine {
                 let mut is_edit = plan.is_edit;
                 let mut tall_point_row_temp_scroll_step = plan.tall_point_row_temp_scroll_step;
                 let mut tall_point_row_settled = false;
+                let mut tall_point_row_initial_extra: i64 = 0;
                 let mut visibility_retry_budget = if query_window.is_some()
                     || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
                 {
@@ -3834,6 +3835,7 @@ impl LayoutEngine {
                         is_edit,
                         tall_point_row_temp_scroll_step,
                         tall_point_row_settled,
+                        tall_point_row_initial_extra,
                         position_publication,
                         position_chrome.is_none()
                             && !chrome_remeasured
@@ -3920,6 +3922,9 @@ impl LayoutEngine {
                             }
                             if retry.params.window_start != live_inputs.window.window_start {
                                 tall_point_row_temp_scroll_step = false;
+                                if !retry.tall_point_row_settled {
+                                    tall_point_row_initial_extra = 1;
+                                }
                             }
                             tall_point_row_settled |= retry.tall_point_row_settled;
                             live_inputs.window = retry.params;
@@ -6889,6 +6894,7 @@ impl LayoutEngine {
         is_edit: bool,
         tall_point_row_temp_scroll_step: bool,
         tall_point_row_settled: bool,
+        tall_point_row_initial_extra: i64,
         position_publication: WindowPositionPublication,
         // Whether this attempt still needs to evaluate/measure chrome. The
         // retry after `WindowChrome` uses the already measured metrics.
@@ -6980,14 +6986,18 @@ impl LayoutEngine {
             ViewportResolutionPhase::Resolve => lisp_ledger
                 .exact_hook_resume(window_id, live_window_start)
                 .unwrap_or_else(|| {
-                    resolve_leaf_window_start(
-                        evaluator,
-                        params,
-                        frame_params,
-                        layout_box,
-                        position_publication,
-                        scroll_replay.is_some(),
-                    )
+                    if let Some(replay) = cursor_only_replay.as_ref() {
+                        ResolvedWindowStart::from_layout_charpos(replay.window_start)
+                    } else {
+                        resolve_leaf_window_start(
+                            evaluator,
+                            params,
+                            frame_params,
+                            layout_box,
+                            position_publication,
+                            scroll_replay.is_some(),
+                        )
+                    }
                 }),
             ViewportResolutionPhase::Measure(measurement) => {
                 ResolvedWindowStart::from_layout_charpos(measurement.probe_window_start().get())
@@ -7592,6 +7602,7 @@ impl LayoutEngine {
                 temp_scroll_step: tall_point_row_temp_scroll_step && !is_edit,
                 already_scrolled: tall_point_row_settled
                     || matches!(viewport_resolution, ViewportResolutionPhase::Measure(_)),
+                initial_extra_scroll_margin_lines: tall_point_row_initial_extra,
             },
         );
         // Conditional display/face callbacks above may have changed a source

@@ -874,6 +874,7 @@ struct ResolvedTextWindowCursor {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TextWindowDecorativeCursor {
     pub(crate) window_id: i64,
+    pub(crate) clip_window_id: Option<DisplayWindowId>,
     pub(crate) slot_id: DisplaySlotId,
     pub(crate) x: f32,
     pub(crate) y: f32,
@@ -999,6 +1000,7 @@ impl ResolvedTextWindowCursor {
             style: self.captured.style,
             color: self.captured.color,
             cursor_fg: self.captured.cursor_fg,
+            clip_window_id: None,
         }
     }
 }
@@ -1172,6 +1174,7 @@ pub(crate) fn publish_text_window_decorative_cursor(
             style: cursor.style,
             color: cursor.color,
             cursor_fg: cursor.cursor_fg,
+            clip_window_id: cursor.clip_window_id,
         },
     );
 }
@@ -1180,19 +1183,22 @@ fn install_text_window_cursor_artifact(
     output_builder: &mut DisplayOutputBuilder,
     cursor: TextWindowCursorArtifact,
 ) {
-    output_builder.install_output_cursor(OutputCursorInstallRequest::new(
-        DisplayWindowId::new(cursor.window_id),
-        cursor.role,
-        cursor.slot_id,
-        cursor.x,
-        cursor.y,
-        cursor.width,
-        cursor.height,
-        cursor.ascent,
-        cursor.style,
-        cursor.color,
-        cursor.cursor_fg,
-    ));
+    output_builder.install_output_cursor(
+        OutputCursorInstallRequest::new(
+            DisplayWindowId::new(cursor.window_id),
+            cursor.role,
+            cursor.slot_id,
+            cursor.x,
+            cursor.y,
+            cursor.width,
+            cursor.height,
+            cursor.ascent,
+            cursor.style,
+            cursor.color,
+            cursor.cursor_fg,
+        )
+        .with_clip_window_id(cursor.clip_window_id),
+    );
 }
 
 fn store_text_window_phys_cursor(output_builder: &mut DisplayOutputBuilder, cursor: PhysCursor) {
@@ -1238,6 +1244,7 @@ struct TextWindowCursorArtifact {
     style: CursorStyle,
     color: Color,
     cursor_fg: Color,
+    clip_window_id: Option<DisplayWindowId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1286,13 +1293,26 @@ impl TextWindowCursorPublication {
             }
         };
         install_text_window_row_cursor(output.builder(), self.row, self.row_col, self.style);
-        output_emitter.set_phys_cursor(self.live_cursor.clone());
+        // GNU `display_and_set_cursor` (`src/xdisp.c:35192-35193`) records
+        // `w->phys_cursor_height = glyph_row->height` for `window-cursor-info`,
+        // even on mixed-height rows where the glyph under point is shorter
+        // than the row's full height.
+        let mut live_cursor = self.live_cursor;
+        if let Some(row) = output_emitter
+            .rows()
+            .iter()
+            .find(|row| row.row == live_cursor.row)
+            && row.height > live_cursor.height
+        {
+            live_cursor.height = row.height;
+        }
+        output_emitter.set_phys_cursor(live_cursor.clone());
         TextWindowCursorPublicationOutcome {
             installed_cursor_artifact,
             stored_phys_cursor,
             row: self.row,
             row_col: self.row_col,
-            live_cursor: self.live_cursor,
+            live_cursor,
         }
     }
 }
@@ -1719,6 +1739,14 @@ impl WindowOutputEmitter {
         pos: LispCharPos1,
     ) -> Option<DisplayPointSnapshot> {
         self.geometry.point_for_lisp_buffer_pos(pos)
+    }
+
+    pub(crate) fn max_glyph_height_on_row_before_pos(
+        &self,
+        row: i64,
+        pos: LispCharPos1,
+    ) -> Option<i64> {
+        self.geometry.max_glyph_height_on_row_before_pos(row, pos)
     }
 
     pub(crate) fn row_metrics(&self) -> &[RowMetricsSnapshot] {

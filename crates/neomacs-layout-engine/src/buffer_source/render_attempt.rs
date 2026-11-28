@@ -721,7 +721,7 @@ impl BufferSourceRetryPlan {
     pub(crate) fn should_retry(&self, remaining_visibility_retries: usize) -> Option<i64> {
         self.retry_window_start().filter(|new_window_start| {
             remaining_visibility_retries > 0
-                && *new_window_start > self.retry.semantic_window_start()
+                && *new_window_start != self.retry.semantic_window_start()
         })
     }
 

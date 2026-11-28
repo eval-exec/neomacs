@@ -1632,10 +1632,21 @@ impl BufferSourceOutputSetup {
                 use crate::display_text_window_row_lifecycle::TextWindowCursorPublishStatus;
                 let point = scroll.new_point.max(0) as usize;
                 let point_row_on_screen = match cursor_status {
-                    // The cursor snapshot is text-area relative.
+                    // The cursor snapshot is text-area relative. A settled
+                    // tall row at window-absolute vpos 0 (no header-line above
+                    // it) cannot be scrolled any higher (GNU xdisp.c:19333), so
+                    // edit replay accepts it without forcing ReplayMispredicted.
                     TextWindowCursorPublishStatus::Published => {
                         output_emitter.phys_cursor().is_some_and(|cursor| {
                             (cursor.y + cursor.height) as f32 <= geometry.text_height + 0.5
+                                || (cursor.row == 0
+                                    && cursor.y >= 0
+                                    && (cursor.y as f32) < geometry.text_height
+                                    && output_emitter
+                                        .rows()
+                                        .iter()
+                                        .find(|r| r.row == 0)
+                                        .is_some_and(|r| (r.height as f32) >= geometry.text_height))
                         })
                     }
                     TextWindowCursorPublishStatus::NoWindowCursor => output
@@ -1666,6 +1677,35 @@ impl BufferSourceOutputSetup {
                         rows.sort_by_key(|row| row.row);
                         let text_top = (layout_box.body().y - params.bounds.y).round() as i64;
                         let text_bottom = visible_bottom.round() as i64;
+                        let point_row_prefix_height = rows
+                            .iter()
+                            .find_map(|row| {
+                                let start = row
+                                    .start_buffer_pos
+                                    .map(crate::coords::lisp_char_pos_to_layout_i64)
+                                    .unwrap_or(i64::MAX);
+                                let end = row
+                                    .end_buffer_pos
+                                    .map(crate::coords::lisp_char_pos_to_layout_i64)
+                                    .unwrap_or(i64::MIN);
+                                (start <= scroll.new_point && scroll.new_point <= end)
+                                    .then_some(row.row)
+                            })
+                            .and_then(|row| {
+                                output_emitter.max_glyph_height_on_row_before_pos(
+                                    row,
+                                    crate::coords::layout_i64_char_pos_to_lisp_char_pos(
+                                        scroll.new_point,
+                                    ),
+                                )
+                            });
+                        let point_row_ends_at_eob_without_newline =
+                            crate::display_row::walk_state::point_row_ends_at_eob_without_newline(
+                                &rows,
+                                scroll.new_point,
+                                source.accessible_end(),
+                                buf_access,
+                            );
                         let retry =
                             crate::display_text_window_row_lifecycle::TextWindowVisibilityRetryRequest::new(
                                 &rows,
@@ -1684,12 +1724,19 @@ impl BufferSourceOutputSetup {
                             )
                             .with_tall_point_row_context(TallPointRowScrollContext {
                                 default_line_height: geometry.char_height.round().max(1.0) as i64,
+                                scroll_step: params.scroll_step,
+                                make_cursor_line_fully_visible: params
+                                    .make_cursor_line_fully_visible,
                                 is_minibuffer: params.is_minibuffer(),
                                 has_vscroll: params.vscroll != 0,
                                 force_start: params.force_start,
                                 temp_scroll_step: false,
                                 already_scrolled_this_redisplay: tall_point_row_scroll_mode
                                     .already_scrolled,
+                                initial_extra_scroll_margin_lines: tall_point_row_scroll_mode
+                                    .initial_extra_scroll_margin_lines,
+                                point_row_prefix_height,
+                                point_row_ends_at_eob_without_newline,
                             })
                             .decide();
                         let retry_plan = BufferSourceRetryPlan::from_post_loop(
