@@ -44,9 +44,9 @@ pub(crate) use scheduler::{
     ConditionId, Control, EraCloseError, Lifecycle, MutexId, OwnerWake, ParallelWaitOutcome,
     SchedulerIndexInconsistency, SignalHint, ThreadKey, Wait,
 };
-pub(crate) use switch::WorldSeatParkedRoots;
 #[doc(hidden)]
 pub use switch::{GreenSeat, SelectTurn};
+pub(crate) use switch::{WorldSeatParkedRoots, switch_refusal};
 
 use super::admission::AdmissionError;
 use super::{Context, ThreadingMode};

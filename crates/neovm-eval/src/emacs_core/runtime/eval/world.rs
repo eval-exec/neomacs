@@ -241,7 +241,7 @@ impl WorldLease {
     pub(in crate::emacs_core::eval) fn parallel_activation_tag_raw(&self) -> u8 {
         self.0
             .parallel_activation_tag
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     #[inline]

@@ -4409,6 +4409,11 @@ impl Control {
         else {
             unreachable!("checked EraOpen above");
         };
+        // Retire the fast-path `OnceLock<Arc<RingWaiter>>` slot so
+        // `era_ring_waiter_raised_fast()` cannot observe a closed era's stale
+        // waiter.
+        self.era_waiter_reused
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok((TurnRight::Solo(baton), link.world, link.port))
     }
 

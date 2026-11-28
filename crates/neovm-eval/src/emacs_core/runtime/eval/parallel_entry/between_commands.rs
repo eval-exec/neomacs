@@ -70,16 +70,61 @@ const _: () = {
 
 /// Permanent conservative refusal recorded on [`ParallelActivationState::Refused`].
 ///
-/// Only invariants that cannot change during a session belong here (E7-P.2 R2).
-/// Transient or resource-bounded failures (`NotSeatedMain`, `KeeperStartFailed`,
-/// `GcBusy`, `LegacyJitBusy`, `NativeActivation`, `OpenEraFailed`, etc.) keep
-/// [`ParallelActivationState::PendingUpgrade`] and retry at the next quiescent
-/// `BetweenCommands` boundary.
+/// Only structural invariants that cannot heal during a session belong here
+/// (E7-P.2 R2). Transient or resource-bounded failures (`NotSeatedMain`,
+/// `KeeperStartFailed`, `GcBusy`, `LegacyJitBusy`, `NativeActivation`,
+/// `OpenEraFailed`, etc.) keep [`ParallelActivationState::PendingUpgrade`] and
+/// retry at the next quiescent `BetweenCommands` boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivationRefusal {
     GenerationalDisabled,
     NotGreenWorld,
     HeapUnsupported,
+    LegacyJitWithdrawalImpossible,
+}
+
+/// Classification of a [`LiveEraOpenError`] at `BetweenCommands`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EraOpenErrorClass {
+    Permanent(ActivationRefusal),
+    Transient,
+}
+
+/// Exhaustively classify every [`LiveEraOpenError`] variant (including
+/// `#[cfg(test)] InjectedFault`) so a new variant cannot be added without
+/// explicitly choosing permanent refusal vs transient retry.
+pub(crate) const fn classify_era_open_error(err: LiveEraOpenError) -> EraOpenErrorClass {
+    match err {
+        // Structural session invariants that cannot heal within a session:
+        LiveEraOpenError::GenerationalRequired => {
+            EraOpenErrorClass::Permanent(ActivationRefusal::GenerationalDisabled)
+        }
+        LiveEraOpenError::HeapUnsupported => {
+            EraOpenErrorClass::Permanent(ActivationRefusal::HeapUnsupported)
+        }
+        LiveEraOpenError::LegacyJitWithdrawalFailed => {
+            EraOpenErrorClass::Permanent(ActivationRefusal::LegacyJitWithdrawalImpossible)
+        }
+        // Transient / resource-bounded conditions that can heal on a later
+        // quiescent `BetweenCommands` boundary:
+        LiveEraOpenError::NotSeatedMain
+        | LiveEraOpenError::NotSolo
+        | LiveEraOpenError::GcBusy
+        // Harmless in the transient group because the command loop is already exiting.
+        | LiveEraOpenError::Closing
+        | LiveEraOpenError::SeatPark
+        | LiveEraOpenError::DrainFailed
+        | LiveEraOpenError::TransferFailed
+        | LiveEraOpenError::KeeperStartFailed
+        | LiveEraOpenError::OpenEraFailed
+        | LiveEraOpenError::InitialTurnFailed
+        | LiveEraOpenError::NativeActivation
+        | LiveEraOpenError::LegacyJitBusy
+        | LiveEraOpenError::DeferredToBetweenCommands
+        | LiveEraOpenError::ActivationRefused => EraOpenErrorClass::Transient,
+        #[cfg(test)]
+        LiveEraOpenError::InjectedFault => EraOpenErrorClass::Transient,
+    }
 }
 
 /// Active `BetweenCommands` era record published by Main at the quiescent
@@ -273,7 +318,8 @@ impl Context {
     /// payloads rather than restoring legacy JIT; sessions that never opened an
     /// era keep `legacy_jit_withdrawn() == false`).
     pub(crate) fn reset_parallel_activation_on_teardown(&self) {
-        *self.world_lease().lock_parallel_activation() = ParallelActivationState::Inactive;
+        let mut state = self.world_lease().lock_parallel_activation();
+        *state = ParallelActivationState::Inactive;
         self.world_lease()
             .set_parallel_activation_tag_raw(ParallelActivationTag::Inactive as u8);
         self.world_lease().set_parallel_activation_fast(false);
@@ -418,48 +464,25 @@ impl Context {
                     #[cfg(test)]
                     slice_override: None,
                 };
-                *self.world_lease().lock_parallel_activation() =
-                    ParallelActivationState::Active(activation);
-                self.world_lease()
-                    .set_parallel_activation_tag_raw(ParallelActivationTag::Active as u8);
-                self.world_lease().set_parallel_activation_fast(true);
+                {
+                    let mut state = self.world_lease().lock_parallel_activation();
+                    *state = ParallelActivationState::Active(activation);
+                    self.world_lease()
+                        .set_parallel_activation_tag_raw(ParallelActivationTag::Active as u8);
+                    self.world_lease().set_parallel_activation_fast(true);
+                }
             }
-            // Permanent conservative refusal: conditions that cannot change
-            // during this session. Record once and stop re-probing (E7-P.2 R2).
-            Err(LiveEraOpenError::GenerationalRequired) => {
-                self.record_activation_refusal(ActivationRefusal::GenerationalDisabled);
-            }
-            Err(LiveEraOpenError::HeapUnsupported) => {
-                self.record_activation_refusal(ActivationRefusal::HeapUnsupported);
-            }
-            // Transient or resource-bounded conditions stay `PendingUpgrade`
-            // and retry on the next quiescent `BetweenCommands` boundary
-            // (E7-P.2 R2). Exhaustive match forces explicit classification of
-            // any new `LiveEraOpenError` variant.
-            Err(
-                err @ (LiveEraOpenError::NotSeatedMain
-                | LiveEraOpenError::NotSolo
-                | LiveEraOpenError::GcBusy
-                | LiveEraOpenError::Closing
-                | LiveEraOpenError::SeatPark
-                | LiveEraOpenError::DrainFailed
-                | LiveEraOpenError::TransferFailed
-                | LiveEraOpenError::KeeperStartFailed
-                | LiveEraOpenError::OpenEraFailed
-                | LiveEraOpenError::InitialTurnFailed
-                | LiveEraOpenError::NativeActivation
-                | LiveEraOpenError::LegacyJitBusy
-                | LiveEraOpenError::LegacyJitWithdrawalFailed
-                | LiveEraOpenError::DeferredToBetweenCommands
-                | LiveEraOpenError::ActivationRefused),
-            ) => {
-                tracing::debug!(
-                    ?err,
-                    "E7-P.2 BetweenCommands era open transiently deferred; keeping PendingUpgrade"
-                );
-            }
-            #[cfg(test)]
-            Err(LiveEraOpenError::InjectedFault) => {}
+            Err(err) => match classify_era_open_error(err) {
+                EraOpenErrorClass::Permanent(refusal) => {
+                    self.record_activation_refusal(refusal);
+                }
+                EraOpenErrorClass::Transient => {
+                    tracing::debug!(
+                        ?err,
+                        "E7-P.2 BetweenCommands era open transiently deferred; keeping PendingUpgrade"
+                    );
+                }
+            },
         }
     }
 
@@ -468,13 +491,21 @@ impl Context {
             ?refusal,
             "E7-P.2 BetweenCommands activation permanently refused; falling back to Baton"
         );
-        *self.world_lease().lock_parallel_activation() = ParallelActivationState::Refused(refusal);
+        let mut state = self.world_lease().lock_parallel_activation();
+        *state = ParallelActivationState::Refused(refusal);
         self.world_lease()
             .set_parallel_activation_tag_raw(ParallelActivationTag::Refused as u8);
         self.world_lease().set_parallel_activation_fast(false);
     }
 
     fn service_active_between_commands_fairness(&mut self) -> Result<(), Flow> {
+        // Skip maintenance yields whenever `switch_refusal` would reject a
+        // thread switch (GC inhibited, GC driver active, or dynamic module
+        // call active) so a BetweenCommands boundary never injects an
+        // unsolicited Lisp error.
+        if super::super::green::switch_refusal(self).is_some() {
+            return Ok(());
+        }
         // HIGH #3: Only Main holding an Era turn services BetweenCommands
         // fairness and updates Main's burst timer. Non-Main Baton workers
         // entering `command_loop_1` (e.g. via kbd macro) are a no-op here.

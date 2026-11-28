@@ -32,9 +32,10 @@ In an interactive command loop (`recursive-depth == 0` and
   permanently refusing the session.
 - Non-interactive `--batch --eval` sessions without an interactive command loop
   keep immediate era admission on the first opt-in call.
-- Permanent session refusals (non-Green world, non-generational heap, or
-  unsupported heap features) fall back to cooperative Baton `make-thread`
-  (`(neomacs-thread-parallel-p th)` returns `nil`) without re-probing.
+- Permanent session refusals (non-Green world, non-generational heap,
+  unsupported heap features, or structural legacy JIT withdrawal mismatch)
+  fall back to cooperative Baton `make-thread` (`(neomacs-thread-parallel-p th)`
+  returns `nil`) without re-probing.
   Transient resource/startup failures (e.g., OS thread spawn refusal) retry on
   the next quiescent between-commands boundary.
 
@@ -47,10 +48,16 @@ In an interactive command loop (`recursive-depth == 0` and
   across terminal `green_teardown` (because `DetachedSourceCache::drop` retains
   payloads rather than restoring legacy JIT; sessions that never opened a
   parallel era keep `legacy_jit_withdrawn == false`).
+- **Measured post-era cost on Main:** After era commit, Main's tight bytecode
+  loop (`sum(1..=500)`) is **6.44x slower** (`1.40 us/call` under legacy serial
+  JIT with 500 native entries -> `9.02 us/call` interpreter-only with 0 compiles
+  and 0 native entries) for the remainder of the session. Probe scope:
+  `neovm-eval --lib --release` (`e7p2_d4_and_qb_measurement_probe`), one
+  500-call sample per arm.
 - Closing the era automatically when active parallel owners drop to zero
   (`close-on-zero-owners`) is intentionally deferred; Main stays on the
   interpreter for the remainder of the session once an opt-in parallel era has
-  opened.
+  opened. The eventual fix is native JIT execution on Main.
 
 ## 4. Cooperative Fairness Scope (Q-A / Q-B)
 

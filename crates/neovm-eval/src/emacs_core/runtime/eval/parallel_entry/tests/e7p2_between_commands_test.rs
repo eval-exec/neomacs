@@ -8,8 +8,8 @@
 //! - D4 & zero-cost default: `Inactive` no-opt-in identity row + Main legacy JIT withdrawal while era open
 
 use super::{
-    ActivationRefusal, BATON_BURST_QUANTUM, MIN_FAIRNESS_SLICE_FLOOR, PARALLEL_FAIRNESS_SLICE,
-    ParallelActivationTag,
+    ActivationRefusal, BATON_BURST_QUANTUM, EraOpenErrorClass, MIN_FAIRNESS_SLICE_FLOOR,
+    PARALLEL_FAIRNESS_SLICE, ParallelActivationTag, classify_era_open_error,
 };
 use crate::emacs_core::eval::data::minibuffer_entry::{
     MinibufferManagerExt, RecursiveMinibufferPolicy,
@@ -800,13 +800,21 @@ fn e7p2_qb_pure_compute_fairness_slice_unblocks_cpu_bound_owner_during_burst() {
                   \"e7p2-pure-cpu\"))
            (while (null e7p2-cpu-ready) (thread-yield))
            (setq e7p2-h4-run t)
+           (setq e7p2-h4-ticks 0)
            (setq e7p2-h4-baton
                  (make-thread
-                  (lambda () (while e7p2-h4-run (thread-yield)) 'baton-done)
+                  (lambda ()
+                    (while e7p2-h4-run
+                      (setq e7p2-h4-ticks (1+ e7p2-h4-ticks))
+                      (thread-yield))
+                    'baton-done)
                   \"e7p2-h4-baton-sibling\"))
            (neomacs-thread-parallel-p e7p2-cpu-th))",
     );
     assert_eq!(setup, "t");
+    let ticks_before: i64 = eval_printed(&mut ctx, "e7p2-h4-ticks")
+        .parse()
+        .expect("numeric e7p2-h4-ticks before burst");
     assert_eq!(
         control.live_parallel_participant_count_fast(),
         1,
@@ -818,7 +826,7 @@ fn e7p2_qb_pure_compute_fairness_slice_unblocks_cpu_bound_owner_during_burst() {
     );
 
     ctx.set_fairness_overrides_for_test(Some(BATON_BURST_QUANTUM), Some(PARALLEL_FAIRNESS_SLICE));
-    let (_waiter, idle_epoch, _pcount) = control
+    let (stale_waiter, idle_epoch, _pcount) = control
         .era_between_commands_handles()
         .expect("open era handles");
     let idle_before = idle_epoch.load(Ordering::Relaxed);
@@ -865,6 +873,13 @@ fn e7p2_qb_pure_compute_fairness_slice_unblocks_cpu_bound_owner_during_burst() {
         measured_yield_ms >= 1.5,
         "MEDIUM #6: empirical wall-clock yield time across {fires} slices must be >= 1.5ms (got {measured_yield_ms:.2}ms)"
     );
+    let ticks_after: i64 = eval_printed(&mut ctx, "e7p2-h4-ticks")
+        .parse()
+        .expect("numeric e7p2-h4-ticks after burst");
+    assert!(
+        ticks_after > ticks_before,
+        "HIGH #4 / review #4.2: runnable sibling Baton worker must make forward progress during the burst before join (before={ticks_before}, after={ticks_after})"
+    );
 
     // Wake and join both the parallel owner and the runnable Baton sibling.
     assert_eq!(
@@ -905,6 +920,13 @@ fn e7p2_qb_pure_compute_fairness_slice_unblocks_cpu_bound_owner_during_burst() {
     ctx.command_loop_mut().recursive_depth = 0;
     ctx.command_loop_mut().running = false;
     ctx.green_teardown();
+    // Review #2: `close_era` marks `era_waiter_reused = true` so
+    // `era_ring_waiter_raised_fast()` cannot observe a closed era's stale waiter.
+    stale_waiter.set_for_test(true);
+    assert!(
+        !control.era_ring_waiter_raised_fast(),
+        "review #2: era_ring_waiter_raised_fast must return false after close_era even if stale waiter is raised"
+    );
     assert_eq!(
         ctx.parallel_activation_tag_for_test(),
         ParallelActivationTag::Inactive
@@ -1673,4 +1695,300 @@ fn e7p2_h3_non_main_baton_worker_cannot_activate_or_refuse_or_mutate_fairness() 
         ctx.legacy_jit_withdrawn_for_test(),
         "T2/P2: post-teardown legacy_jit_withdrawn stays true once an era opened"
     );
+}
+
+/// R2 / lead sign-conditional row (a): exhaustive table asserting permanent vs
+/// transient classification across every `LiveEraOpenError` variant (including
+/// `#[cfg(test)] InjectedFault`).
+#[test]
+fn e7p2_r2_classify_era_open_error_exhaustive_table() {
+    use super::super::live_admission::LiveEraOpenError;
+
+    let cases: &[(LiveEraOpenError, EraOpenErrorClass)] = &[
+        (
+            LiveEraOpenError::GenerationalRequired,
+            EraOpenErrorClass::Permanent(ActivationRefusal::GenerationalDisabled),
+        ),
+        (
+            LiveEraOpenError::HeapUnsupported,
+            EraOpenErrorClass::Permanent(ActivationRefusal::HeapUnsupported),
+        ),
+        (
+            LiveEraOpenError::LegacyJitWithdrawalFailed,
+            EraOpenErrorClass::Permanent(ActivationRefusal::LegacyJitWithdrawalImpossible),
+        ),
+        (
+            LiveEraOpenError::NotSeatedMain,
+            EraOpenErrorClass::Transient,
+        ),
+        (LiveEraOpenError::NotSolo, EraOpenErrorClass::Transient),
+        (LiveEraOpenError::GcBusy, EraOpenErrorClass::Transient),
+        (LiveEraOpenError::Closing, EraOpenErrorClass::Transient),
+        (LiveEraOpenError::SeatPark, EraOpenErrorClass::Transient),
+        (LiveEraOpenError::DrainFailed, EraOpenErrorClass::Transient),
+        (
+            LiveEraOpenError::TransferFailed,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::KeeperStartFailed,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::OpenEraFailed,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::InitialTurnFailed,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::NativeActivation,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::LegacyJitBusy,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::DeferredToBetweenCommands,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::ActivationRefused,
+            EraOpenErrorClass::Transient,
+        ),
+        (
+            LiveEraOpenError::InjectedFault,
+            EraOpenErrorClass::Transient,
+        ),
+    ];
+
+    // Compile-time exhaustiveness witness: adding any variant to
+    // `LiveEraOpenError` forces updating this test table too.
+    let mut covered = 0usize;
+    for &(err, expected) in cases {
+        match err {
+            LiveEraOpenError::GenerationalRequired
+            | LiveEraOpenError::HeapUnsupported
+            | LiveEraOpenError::LegacyJitWithdrawalFailed
+            | LiveEraOpenError::NotSeatedMain
+            | LiveEraOpenError::NotSolo
+            | LiveEraOpenError::GcBusy
+            | LiveEraOpenError::Closing
+            | LiveEraOpenError::SeatPark
+            | LiveEraOpenError::DrainFailed
+            | LiveEraOpenError::TransferFailed
+            | LiveEraOpenError::KeeperStartFailed
+            | LiveEraOpenError::OpenEraFailed
+            | LiveEraOpenError::InitialTurnFailed
+            | LiveEraOpenError::NativeActivation
+            | LiveEraOpenError::LegacyJitBusy
+            | LiveEraOpenError::DeferredToBetweenCommands
+            | LiveEraOpenError::ActivationRefused
+            | LiveEraOpenError::InjectedFault => {
+                covered += 1;
+            }
+        }
+        assert_eq!(
+            classify_era_open_error(err),
+            expected,
+            "unexpected classification for {err:?}"
+        );
+    }
+    assert_eq!(covered, cases.len());
+}
+
+/// R2 / lead sign-conditional row (b): a structural legacy JIT withdrawal
+/// failure (`LiveEraOpenError::LegacyJitWithdrawalFailed`) permanently refuses
+/// activation (`Refused(LegacyJitWithdrawalImpossible)` + `fast == false`) and
+/// subsequent quiescent command boundaries NEVER reach `ensure_live_parallel_era`
+/// again (attempt count stays at 1).
+#[test]
+fn e7p2_r2_structural_legacy_jit_withdrawal_failure_refuses_permanently_without_reprobe() {
+    use super::super::live_admission::{
+        LiveEraOpenError, LiveEraOpenFault, SpawnParallelError, era_open_attempts_for_test,
+        set_era_open_fault_for_test,
+    };
+
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_gen1_context();
+        let (outer, guard) = enter_simulated_top_level_command_loop(&mut ctx);
+
+        let attempts_before = era_open_attempts_for_test();
+
+        // First mid-command opt-in falls back to Baton and arms PendingUpgrade.
+        let first = eval_printed(
+            &mut ctx,
+            "(let ((th (neomacs-make-parallel-thread (lambda () (+ 40 2)) \"r2-struct-1\")))
+               (list (thread-join th) (neomacs-thread-parallel-p th)))",
+        );
+        assert_eq!(first, "(42 nil)");
+        assert_eq!(
+            ctx.parallel_activation_tag_for_test(),
+            ParallelActivationTag::PendingUpgrade
+        );
+        assert!(ctx.parallel_activation_fast_for_test());
+        assert_eq!(era_open_attempts_for_test(), attempts_before);
+
+        // Inject structural withdrawal failure inside `EraOpened::commit()`.
+        set_era_open_fault_for_test(Some(LiveEraOpenFault::FailLegacyJitWithdrawalStructural));
+        ctx.parallel_between_commands_boundary()
+            .expect("structural withdrawal refusal records permanent Refused");
+        set_era_open_fault_for_test(None);
+
+        assert_eq!(
+            era_open_attempts_for_test(),
+            attempts_before + 1,
+            "first quiescent boundary must invoke ensure_live_parallel_era exactly once"
+        );
+        assert_eq!(
+            ctx.parallel_activation_tag_for_test(),
+            ParallelActivationTag::Refused
+        );
+        assert_eq!(
+            ctx.parallel_activation_refusal_for_test(),
+            Some(ActivationRefusal::LegacyJitWithdrawalImpossible)
+        );
+        assert!(
+            !ctx.parallel_activation_fast_for_test(),
+            "permanent structural refusal must clear parallel_activation_fast"
+        );
+        assert!(!ctx.legacy_jit_withdrawn_for_test());
+        assert!(!ctx.green_control().era_is_open());
+
+        // Subsequent quiescent boundaries must NOT re-enter ensure_live_parallel_era.
+        ctx.parallel_between_commands_boundary()
+            .expect("second boundary is fast-path no-op");
+        ctx.parallel_between_commands_boundary()
+            .expect("third boundary is fast-path no-op");
+        assert_eq!(
+            era_open_attempts_for_test(),
+            attempts_before + 1,
+            "subsequent quiescent boundaries must never reach ensure_live_parallel_era after structural refusal"
+        );
+
+        // Subsequent opt-in creator calls short-circuit to Baton without re-probing.
+        let closure = ctx.eval_str("(lambda () (+ 41 2))").expect("eval closure");
+        assert!(matches!(
+            ctx.spawn_parallel_opt_in_thread(&[closure]),
+            Err(SpawnParallelError::Refused(
+                LiveEraOpenError::ActivationRefused
+            ))
+        ));
+        let second = eval_printed(
+            &mut ctx,
+            "(let ((th (neomacs-make-parallel-thread (lambda () (+ 41 2)) \"r2-struct-2\")))
+               (list (thread-join th) (neomacs-thread-parallel-p th)))",
+        );
+        assert_eq!(second, "(43 nil)");
+        assert_eq!(era_open_attempts_for_test(), attempts_before + 1);
+        assert_eq!(
+            ctx.parallel_activation_tag_for_test(),
+            ParallelActivationTag::Refused
+        );
+        assert!(!ctx.parallel_activation_fast_for_test());
+
+        drop(guard);
+        ctx.unbind_to(outer);
+        ctx.command_loop_mut().recursive_depth = 0;
+        ctx.command_loop_mut().running = false;
+        ctx.green_teardown();
+        assert_eq!(
+            ctx.parallel_activation_tag_for_test(),
+            ParallelActivationTag::Inactive
+        );
+        assert!(!ctx.parallel_activation_fast_for_test());
+        assert!(!ctx.legacy_jit_withdrawn_for_test());
+    });
+}
+
+/// Review #3: When a `switch_refusal` condition holds (e.g., `gc_inhibit_depth > 0`),
+/// `service_active_between_commands_fairness` skips both `BurstYield` and
+/// `FairnessSlice` without raising any Lisp error or mutating yield counters.
+#[test]
+fn e7p2_switch_refusal_skips_between_commands_fairness_without_error() {
+    with_parallel_admission_enabled_for_test(|| {
+        let mut ctx = green_gen1_context();
+        let control = ctx.green_control();
+        let (outer, guard) = enter_simulated_top_level_command_loop(&mut ctx);
+
+        ctx.arm_pending_upgrade_for_test();
+        ctx.parallel_between_commands_boundary().unwrap();
+        assert_eq!(
+            ctx.parallel_activation_tag_for_test(),
+            ParallelActivationTag::Active
+        );
+
+        // Spawn a live quiet parallel owner so FairnessSlice would normally fire
+        // once the burst quantum expires.
+        let setup = eval_printed(
+            &mut ctx,
+            "(progn
+               (setq e7p2-sr-m (make-mutex \"e7p2-sr-m\"))
+               (setq e7p2-sr-c (make-condition-variable e7p2-sr-m \"e7p2-sr-c\"))
+               (setq e7p2-sr-ready nil)
+               (setq e7p2-sr-th
+                     (neomacs-make-parallel-thread
+                      (lambda ()
+                        (mutex-lock e7p2-sr-m)
+                        (setq e7p2-sr-ready t)
+                        (condition-wait e7p2-sr-c)
+                        (mutex-unlock e7p2-sr-m)
+                        7)
+                      \"e7p2-sr-owner\"))
+               (while (null e7p2-sr-ready) (thread-yield))
+               (neomacs-thread-parallel-p e7p2-sr-th))",
+        );
+        assert_eq!(setup, "t");
+        let (waiter, _idle_epoch, _pcount) = control
+            .era_between_commands_handles()
+            .expect("open era handles");
+
+        ctx.set_fairness_overrides_for_test(
+            Some(Duration::from_nanos(1)),
+            Some(PARALLEL_FAIRNESS_SLICE),
+        );
+        let (b0, f0) = ctx.between_commands_counters_for_test().unwrap();
+
+        // 1. Inhibit GC (`switch_refusal(ctx).is_some()`) and test BOTH
+        //    expired-quantum FairnessSlice and raised-RingWaiter BurstYield paths.
+        ctx.gc_inhibit_depth += 1;
+        assert!(
+            crate::emacs_core::eval::green::switch_refusal(&ctx).is_some(),
+            "precondition: gc_inhibit_depth > 0 triggers switch_refusal"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+        ctx.parallel_between_commands_boundary()
+            .expect("FairnessSlice path under switch_refusal must return Ok(()) without signaling");
+        waiter.set_for_test(true);
+        ctx.parallel_between_commands_boundary()
+            .expect("BurstYield path under switch_refusal must return Ok(()) without signaling");
+        waiter.set_for_test(false);
+        ctx.gc_inhibit_depth -= 1;
+
+        let (b1, f1) = ctx.between_commands_counters_for_test().unwrap();
+        assert_eq!(
+            (b1, f1),
+            (b0, f0),
+            "review #3: switch_refusal boundary must perform zero BurstYield and zero FairnessSlice yields"
+        );
+
+        assert_eq!(
+            eval_printed(
+                &mut ctx,
+                "(progn
+                   (mutex-lock e7p2-sr-m)
+                   (condition-notify e7p2-sr-c)
+                   (mutex-unlock e7p2-sr-m)
+                   (thread-join e7p2-sr-th))"
+            ),
+            "7"
+        );
+        drop(guard);
+        ctx.unbind_to(outer);
+        ctx.command_loop_mut().recursive_depth = 0;
+        ctx.command_loop_mut().running = false;
+        ctx.green_teardown();
+    });
 }

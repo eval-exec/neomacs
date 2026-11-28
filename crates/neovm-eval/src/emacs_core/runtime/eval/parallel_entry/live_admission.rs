@@ -98,10 +98,19 @@ pub(crate) enum LiveEraOpenFault {
     FailKeeperSpawn,
     PanicAfterIdleKeeperSpawn,
     FailAfterOpenBeforeAcquire,
+    FailLegacyJitWithdrawalStructural,
 }
 
 #[cfg(test)]
 static INJECTED_ERA_OPEN_FAULT: Mutex<Option<LiveEraOpenFault>> = Mutex::new(None);
+
+#[cfg(test)]
+static ERA_OPEN_ATTEMPTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn era_open_attempts_for_test() -> usize {
+    ERA_OPEN_ATTEMPTS.load(Ordering::Relaxed)
+}
 
 #[cfg(test)]
 pub(crate) fn set_era_open_fault_for_test(fault: Option<LiveEraOpenFault>) {
@@ -884,6 +893,14 @@ impl<'a> LiveEraOpenGuard<'a, EraOpened> {
         mut era_right: TurnRight,
         pending_spawns: Arc<Mutex<VecDeque<PendingOwnerSpawn>>>,
     ) -> Result<LiveEraRuntime, LiveEraOpenError> {
+        #[cfg(test)]
+        if take_era_open_fault_matching(LiveEraOpenFault::FailLegacyJitWithdrawalStructural) {
+            let proof = prove_stowed_for_era_switch(self.inner.0.ctx);
+            era_right.set_stowed_for_return(proof);
+            self.inner.0.control.release_era_turn_to_idle(era_right);
+            return Err(LiveEraOpenError::LegacyJitWithdrawalFailed);
+        }
+
         // SAFETY: `ParkedWorldSeat::park_seated` uninstalled `TAGGED_HEAP` on
         // Main, Main holds the exclusive initial `TurnRight::Era` (no parallel
         // owners are spawned yet), and `native_depth() == 0` is enforced.
@@ -1310,6 +1327,9 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn ensure_live_parallel_era(&mut self) -> Result<(), LiveEraOpenError> {
+        #[cfg(test)]
+        ERA_OPEN_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+
         if self
             .green_runtime_ref()
             .as_ref()
@@ -1319,10 +1339,6 @@ impl Context {
         }
         if self.gc_driver_active || self.gc_inhibit_depth > 0 {
             return Err(LiveEraOpenError::GcBusy);
-        }
-        #[cfg(feature = "jit")]
-        if crate::emacs_core::jit::cache::native_depth() != 0 {
-            return Err(LiveEraOpenError::NativeActivation);
         }
         if !self.tagged_heap.tagged_heap_generational_enabled() {
             return Err(LiveEraOpenError::GenerationalRequired);

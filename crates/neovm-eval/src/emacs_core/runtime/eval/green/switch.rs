@@ -384,7 +384,7 @@ impl std::fmt::Debug for GreenSeat {
 }
 
 /// Why a thread may not give the Baton up here.
-fn switch_refusal(ctx: &Context) -> Option<&'static str> {
+pub(crate) fn switch_refusal(ctx: &Context) -> Option<&'static str> {
     if ctx.gc_inhibit_depth != 0 {
         Some("Cannot switch threads while garbage collection is inhibited")
     } else if ctx.gc_driver_active {
