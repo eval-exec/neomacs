@@ -905,7 +905,7 @@ jobs:
                           disabled.add('inventory')
                       command = [str(H), '--exact',
                                  f'native_scrolling::continuous_120hz_scroll_in_large_{scene}_buffer',
-                                 '--nocapture', '--test-threads', '1']
+                                 '--nocapture']
                       row['capture_enabled_ns'] = {r.name: r.started_ns for r in recorders}
                       row['test_spawn_monotonic_ns'] = time.monotonic_ns()
                       owner = cleanup.enter_context(OwnedProcesses())
