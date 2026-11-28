@@ -139,6 +139,12 @@ fn capture_decoration(attribute: LFaceAttr, value: Value, tokens: &mut Vec<Token
         tokens.push(atom(value));
         return;
     }
+    if attribute == LFaceAttr::Box && value.cons_car().is_fixnum() && value.cons_cdr().is_fixnum() {
+        tokens.push(Token::WidthPair);
+        tokens.push(atom(value.cons_car()));
+        tokens.push(atom(value.cons_cdr()));
+        return;
+    }
     let Some(items) = list_to_vec(&value) else {
         // The parser rejects improper/cyclic decoration plists.
         tokens.push(atom(value));

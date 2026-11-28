@@ -1557,4 +1557,31 @@ fn tab_bar_row_height_includes_positive_box_line_width_of_inner_tab_span() {
     );
     assert_eq!(neg_h, plain_h);
     assert_eq!(neg_ascent, plain_ascent);
+
+    // Cons `(VWIDTH . HWIDTH)` with negative horizontal width (as in GNU
+    // `help-key-binding` `(-1 . -1)` and `wid-edit` `(1 . -1)`) paints inside
+    // vertically and must not expand row height.
+    let (neg_pair_h, neg_pair_ascent) = measure_tab(
+        &mut eval,
+        &mut fonts,
+        r#"(propertize "C-h C-a" 'face '(:box (:line-width (-1 . -1) :color "grey80")))"#,
+    );
+    assert_eq!(neg_pair_h, plain_h);
+    assert_eq!(neg_pair_ascent, plain_ascent);
+
+    let (asym_neg_h, asym_neg_ascent) = measure_tab(
+        &mut eval,
+        &mut fonts,
+        r#"(propertize "btn" 'face '(:box (:line-width (3 . -1) :color "grey80")))"#,
+    );
+    assert_eq!(asym_neg_h, plain_h);
+    assert_eq!(asym_neg_ascent, plain_ascent);
+
+    let (asym_pos_h, asym_pos_ascent) = measure_tab(
+        &mut eval,
+        &mut fonts,
+        r#"(propertize "btn" 'face '(:box (:line-width (-1 . 2) :color "grey80")))"#,
+    );
+    assert_eq!(asym_pos_h, plain_h + 4.0);
+    assert_eq!(asym_pos_ascent, plain_ascent + 2.0);
 }

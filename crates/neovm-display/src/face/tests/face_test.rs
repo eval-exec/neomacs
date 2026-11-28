@@ -800,6 +800,32 @@ fn face_merge_preserves_explicit_box_disable() {
 }
 
 #[test]
+fn parse_box_value_cons_pair_preserves_gnu_horizontal_line_width() {
+    crate::test_utils::init_test_tracing();
+    // GNU `xfaces.c:6410-6418, 6444-6446`: `(VWIDTH . HWIDTH)` uses `cdr` for
+    // `box_horizontal_line_width` (top/bottom edges controlling row expansion).
+    let help_key_binding = Value::list(vec![
+        Value::keyword(":line-width"),
+        Value::cons(Value::fixnum(-1), Value::fixnum(-1)),
+        Value::keyword(":color"),
+        Value::string("grey80"),
+    ]);
+    let parsed = parse_box_value(&help_key_binding);
+    assert_eq!(parsed.enabled().expect("enabled box").width, -1);
+
+    let asymmetric = Value::list(vec![
+        Value::keyword(":line-width"),
+        Value::cons(Value::fixnum(3), Value::fixnum(-1)),
+    ]);
+    let parsed = parse_box_value(&asymmetric);
+    assert_eq!(parsed.enabled().expect("enabled box").width, -1);
+
+    let direct_pair = Value::cons(Value::fixnum(2), Value::fixnum(-3));
+    let parsed = parse_box_value(&direct_pair);
+    assert_eq!(parsed.enabled().expect("enabled box").width, -3);
+}
+
+#[test]
 fn face_merge_relative_height_over_absolute_becomes_absolute() {
     crate::test_utils::init_test_tracing();
     let mut base = Face::new("base");

@@ -4731,6 +4731,20 @@ fn lisp_value_to_face_attr_resolved(
                     style: BoxStyle::Simple,
                 }));
             }
+            // Direct `(VWIDTH . HWIDTH)` pair (xfaces.c:6410-6418):
+            // `car` is `box_vertical_line_width` (left/right edges) and
+            // `cdr` is `box_horizontal_line_width` (top/bottom edges that
+            // drive `IT_APPLY_FACE_BOX` vertical row expansion).
+            if value.is_cons()
+                && value.cons_car().is_fixnum()
+                && let Some(h) = value.cons_cdr().as_fixnum()
+            {
+                return Some(FaceAttrValue::Box(BoxBorder {
+                    color: None,
+                    width: h as i32,
+                    style: BoxStyle::Simple,
+                }));
+            }
             // Plist form: (:line-width WIDTH :color COLOR :style STYLE)
             if let Some(plist) = neovm_value::value::list_to_vec(&value) {
                 let mut border = BoxBorder {
@@ -4746,7 +4760,17 @@ fn lisp_value_to_face_attr_resolved(
                     // STRINGP only (xfaces.c:6453-6461). A symbol is not a color.
                     if face_id_eq_bare(key, line_width_kw_id()) {
                         if let Some(n) = val.as_fixnum() {
-                            border.width = n as i32;
+                            if n != 0 {
+                                border.width = n as i32;
+                            }
+                        } else if val.is_cons()
+                            && val.cons_car().is_fixnum()
+                            && let Some(h) = val.cons_cdr().as_fixnum()
+                        {
+                            // GNU xfaces.c:6444-6446: `(VWIDTH . HWIDTH)` stores
+                            // `XCAR` as `box_vertical_line_width` and `XCDR` as
+                            // `box_horizontal_line_width`.
+                            border.width = h as i32;
                         }
                     } else if face_id_eq_bare(key, color_kw_id()) {
                         if classify_face_sentinel(*val, neovm_value::tagged::SymbolMode::Bare)

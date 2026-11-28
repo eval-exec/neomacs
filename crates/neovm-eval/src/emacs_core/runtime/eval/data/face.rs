@@ -1416,6 +1416,17 @@ pub fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
             })
         }
         ValueKind::Cons => {
+            // Direct `(VWIDTH . HWIDTH)` pair (xfaces.c:6410-6418):
+            // `car` is `box_vertical_line_width`, `cdr` is `box_horizontal_line_width`.
+            if value.cons_car().is_fixnum()
+                && let Some(h) = value.cons_cdr().as_fixnum()
+            {
+                return FaceDecoration::Enabled(BoxBorder {
+                    color: None,
+                    width: h as i32,
+                    style: BoxStyle::Simple,
+                });
+            }
             let Some(items) = neovm_value::value::list_to_vec(value) else {
                 return FaceDecoration::Unspecified;
             };
@@ -1428,12 +1439,16 @@ pub fn parse_box_value(value: &Value) -> FaceDecoration<BoxBorder> {
                 let item = &items[i + 1];
                 match key {
                     Some(DecorationProperty::LineWidth) => match item.kind() {
-                        ValueKind::Fixnum(n) => width = n as i32,
+                        ValueKind::Fixnum(n) if n != 0 => width = n as i32,
                         ValueKind::Cons => {
                             let pair_car = item.cons_car();
-                            let _pair_cdr = item.cons_cdr();
-                            if let Some(n) = pair_car.as_fixnum() {
-                                width = n as i32;
+                            let pair_cdr = item.cons_cdr();
+                            // GNU xfaces.c:6444-6446: `XCAR` is vertical width,
+                            // `XCDR` is `box_horizontal_line_width`.
+                            if pair_car.is_fixnum()
+                                && let Some(h) = pair_cdr.as_fixnum()
+                            {
+                                width = h as i32;
                             }
                         }
                         _ => {}

@@ -449,3 +449,69 @@ fn ensure_startup_compat_variables_reseeds_existing_face_defaults_table() {
         "existing face--new-frame-defaults tables must be reseeded after dump load"
     );
 }
+
+#[test]
+fn box_line_width_cons_pair_preserves_gnu_horizontal_line_width() {
+    crate::test_utils::init_test_tracing();
+    use crate::face::{BoxStyle, FaceAttrValue};
+
+    let resolver = FaceColorResolver::Standard;
+
+    // Exact GNU `help-key-binding` spec (lisp/faces.el:3060):
+    // `:box (:line-width (-1 . -1) :color "grey80")`
+    // GNU `xfaces.c:6444-6446` reads `XCAR` as vertical width and `XCDR` as
+    // horizontal width (`box_horizontal_line_width`), which controls vertical
+    // row expansion in `IT_APPLY_FACE_BOX` (`xdisp.c:33569`).
+    let help_key_binding = Value::list(vec![
+        Value::keyword(":line-width"),
+        Value::cons(Value::fixnum(-1), Value::fixnum(-1)),
+        Value::keyword(":color"),
+        Value::string("grey80"),
+    ]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, help_key_binding, resolver) {
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(
+                border.width, -1,
+                "(-1 . -1) horizontal width must be -1, not defaulted to +1"
+            );
+            assert!(border.color.is_some());
+        }
+        other => panic!("expected box for help-key-binding spec, got {other:?}"),
+    }
+
+    // Asymmetric `(VWIDTH . HWIDTH)` (e.g. `wid-edit.el` `(1 . -1)`, `icons.el` `(3 . -1)`):
+    // `cdr` is `box_horizontal_line_width` (-1 -> paints inside vertically, 0 row expansion).
+    let asymmetric_inside = Value::list(vec![
+        Value::keyword(":line-width"),
+        Value::cons(Value::fixnum(3), Value::fixnum(-1)),
+        Value::keyword(":style"),
+        Value::symbol("flat-button"),
+    ]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, asymmetric_inside, resolver) {
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.width, -1);
+            assert_eq!(border.style, BoxStyle::Flat);
+        }
+        other => panic!("expected box for asymmetric inside pair, got {other:?}"),
+    }
+
+    let asymmetric_outside = Value::list(vec![
+        Value::keyword(":line-width"),
+        Value::cons(Value::fixnum(-1), Value::fixnum(2)),
+    ]);
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, asymmetric_outside, resolver) {
+        Some(FaceAttrValue::Box(border)) => assert_eq!(border.width, 2),
+        other => panic!("expected box for asymmetric outside pair, got {other:?}"),
+    }
+
+    // Direct `(VWIDTH . HWIDTH)` cons as the `:box` value (`xfaces.c:6410-6418`).
+    let direct_pair = Value::cons(Value::fixnum(2), Value::fixnum(-3));
+    match lisp_value_to_face_attr_resolved(LFaceAttr::Box, direct_pair, resolver) {
+        Some(FaceAttrValue::Box(border)) => {
+            assert_eq!(border.width, -3);
+            assert_eq!(border.style, BoxStyle::Simple);
+            assert!(border.color.is_none());
+        }
+        other => panic!("expected box for direct (V . H) pair, got {other:?}"),
+    }
+}
