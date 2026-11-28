@@ -1039,7 +1039,10 @@ mod unix_impl {
             // and runs `bootstrap_buffers` once before `fork()`. Each forked
             // child must still receive its own `default-directory` on all
             // startup buffers (`*scratch*`, `*Messages*`, ` *Minibuf-0*`), its
-            // own `EMACSLOADPATH` prefix in `load-path`, and its own `exec-path`.
+            // own `EMACSLOADPATH` prefix in `load-path`, and its own process
+            // environment.  The environment probe is a non-pinned variable:
+            // `USER` is a canonical pin, and `PinnedCommand` refuses a raw
+            // `env("USER", ..)` before the child ever runs.
             let program = PathBuf::from(crate::common::neomacs_binary_path());
             let dir = bounded_temp_dir("nvz-preact-").expect("tempdir");
             let sock = dir.path().join("z.sock");
@@ -1061,7 +1064,7 @@ mod unix_impl {
                                 (directory-file-name default-directory))))
                           '("*scratch*" "*Messages*" " *Minibuf-0*"))
                   (car load-path)
-                  (getenv "USER"))))"#;
+                  (getenv "NEOVM_ZYGOTE_PROBE_TAG"))))"#;
 
             let out_a = run_direct_on_socket(
                 &sock,
@@ -1071,7 +1074,7 @@ mod unix_impl {
                 "child-a",
                 &[
                     ("EMACSLOADPATH", &format!("{}:", extra_lisp.display())),
-                    ("USER", "alice"),
+                    ("NEOVM_ZYGOTE_PROBE_TAG", "alice"),
                 ],
                 inspect_form,
             );
@@ -1087,17 +1090,17 @@ mod unix_impl {
             );
             assert!(
                 s_a.ends_with(r#" "alice")"#),
-                "USER env mismatch in child-a: {s_a}"
+                "per-child env mismatch in child-a: {s_a}"
             );
 
-            // Child B on the SAME zygote has no EMACSLOADPATH and a different cwd/USER.
+            // Child B on the SAME zygote has no EMACSLOADPATH and a different cwd/tag.
             let out_b = run_direct_on_socket(
                 &sock,
                 &program,
                 &cwd_b,
                 dir.path(),
                 "child-b",
-                &[("USER", "bob")],
+                &[("NEOVM_ZYGOTE_PROBE_TAG", "bob")],
                 inspect_form,
             );
             assert!(out_b.status.success(), "child-b failed: {out_b:?}");
@@ -1112,7 +1115,7 @@ mod unix_impl {
             );
             assert!(
                 s_b.ends_with(r#" "bob")"#),
-                "USER env mismatch in child-b: {s_b}"
+                "per-child env mismatch in child-b: {s_b}"
             );
 
             let _ = server.kill();
