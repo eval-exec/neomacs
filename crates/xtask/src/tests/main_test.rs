@@ -648,8 +648,9 @@ printf 'args=%s\nemacs=%s\nhome=%s\n' "$*" "$EMACS" "$HOME" > "$DOOM_TEST_REPORT
 /// Every way a nextest config can make a test wait for pool slots: a
 /// `threads-required` on a profile or override (any value: a number, including
 /// one equal to the pool, `"num-cpus"` or `"num-test-threads"`), a
-/// `test-group` assignment, a `max-threads` key, any `[test-groups]` table,
-/// or a profile with `test-threads = 1`.  Parsed as TOML, so comments, spacing and
+/// `test-group` assignment, a `max-threads` key, any `[test-groups]` table
+/// (top level or per profile), or a profile with `test-threads <= 1` (nextest
+/// reads `n <= 0` as `num_cpus + n`, clamped to 1).  Parsed as TOML, so comments, spacing and
 /// inline-table overrides cannot hide a key.
 fn nextest_pool_slot_reservations(nextest: &str) -> Vec<String> {
     const RESERVATION_KEYS: [&str; 3] = ["threads-required", "test-group", "max-threads"];
@@ -665,12 +666,17 @@ fn nextest_pool_slot_reservations(nextest: &str) -> Vec<String> {
         let Some(profile) = profile.as_table() else {
             continue;
         };
-        if profile
+        // nextest reads a non-positive count as num_cpus + n, clamped to 1, so
+        // `test-threads = -999` is as sequential as `test-threads = 1`.
+        if let Some(threads) = profile
             .get("test-threads")
             .and_then(toml::Value::as_integer)
-            == Some(1)
+            .filter(|&n| n <= 1)
         {
-            found.push(format!("[profile.{name}] test-threads = 1"));
+            found.push(format!("[profile.{name}] test-threads = {threads}"));
+        }
+        if let Some(groups) = profile.get("test-groups") {
+            found.push(format!("[profile.{name}.test-groups] = {groups}"));
         }
         for key in RESERVATION_KEYS {
             if let Some(value) = profile.get(key) {
@@ -734,6 +740,11 @@ fn nextest_pool_slot_guard_rejects_every_reservation_shape() {
         "[[profile.default.overrides]]\nfilter = 'test(a)'\nmax-threads = 1\n",
         // a sequential profile
         "[profile.ci]\ntest-threads = 1\n",
+        // nextest clamps num_cpus + n to 1, so these are sequential too
+        "[profile.ci]\ntest-threads = 0\n",
+        "[profile.ci]\ntest-threads = -999\n",
+        // a per-profile group table, whether or not nextest accepts it
+        "[profile.ci.test-groups]\nserial = { max-threads = 1 }\n",
         // inline-table overrides and odd spacing
         "[profile.default]\noverrides = [ { filter = 'test(a)', \"threads-required\"=3 } ]\n",
     ];

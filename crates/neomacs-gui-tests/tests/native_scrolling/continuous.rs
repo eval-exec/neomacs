@@ -122,11 +122,15 @@ pub(super) fn run(
         {
             thread::sleep(remaining);
         }
-        send_lateness_ns.push(
-            Instant::now()
-                .saturating_duration_since(deadline)
-                .as_nanos() as u64,
-        );
+        // Only paced sends have a slot to be late for; state-only runs
+        // inject back to back.
+        if mode == Mode::CalibratedPacing {
+            send_lateness_ns.push(
+                Instant::now()
+                    .saturating_duration_since(deadline)
+                    .as_nanos() as u64,
+            );
+        }
         sent_ns.push(started.elapsed().as_nanos() as u64);
         trackpad.scroll(if index < inputs / 2 { PIXELS } else { -PIXELS });
         // Observe progress without waiting for a timer or a command. Sampling
@@ -291,8 +295,10 @@ impl Contention {
     fn measure(lateness_ns: &[u64], before: HostLoad, after: HostLoad) -> Self {
         let mut sorted: Vec<u64> = lateness_ns.iter().map(|ns| ns / 1_000).collect();
         sorted.sort_unstable();
-        let p95 =
-            (!sorted.is_empty()).then(|| sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)]);
+        // Nearest rank, the same index latency::Report uses for its p95.
+        let p95 = sorted
+            .get((sorted.len() * 95).div_ceil(100).saturating_sub(1))
+            .copied();
         Self {
             send_lateness_p95_us: p95,
             send_lateness_max_us: sorted.last().copied(),
@@ -334,9 +340,10 @@ mod contention_tests {
 
     #[test]
     fn late_sends_or_a_busy_host_mean_contention() {
-        // 5% of sends 5 ms late puts the p95 over the half-period bound.
-        let mut lateness = vec![100_000; 456];
-        lateness.extend(vec![5_000_000; 24]);
+        // 25 of 480 sends (just over 5%) 5 ms late: the nearest-rank p95, the
+        // 456th value, is late and over the half-period bound.
+        let mut lateness = vec![100_000; 455];
+        lateness.extend(vec![5_000_000; 25]);
         assert!(Contention::measure(&lateness, QUIET, QUIET).contended());
 
         let busy = HostLoad {

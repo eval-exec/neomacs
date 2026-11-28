@@ -609,6 +609,8 @@ fn bad() {
 "##;
     let found = form_candidates(bad);
     assert_eq!(found.len(), 1, "expected one form candidate, got {found:?}");
+    // Line 1 is the empty line after the opening delimiter.
+    assert_eq!(found[0].0, 4, "line of the planted form: {found:?}");
     assert!(
         validate_form_source(&found[0].1).is_err(),
         "the planted malformed form must be rejected"
@@ -628,12 +630,54 @@ fn good() {
         2,
         "expected two form candidates, got {found:?}"
     );
+    assert_eq!(
+        found.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+        [4, 6],
+        "lines of the bound and the direct form: {found:?}"
+    );
     for (_, content) in &found {
         assert!(
             validate_form_source(content).is_ok(),
             "complete form rejected: {content:?}"
         );
     }
+}
+
+/// The newline index is what made the sweep linear, so its answers must
+/// match counting newlines before the offset, on every line-ending shape.
+#[test]
+fn line_index_matches_a_newline_count_before_the_offset() {
+    fn naive(src: &[u8], offset: usize) -> usize {
+        1 + src[..offset].iter().filter(|&&b| b == b'\n').count()
+    }
+    for src in [
+        "",
+        "no trailing newline",
+        "one\ntwo\nthree",
+        "trailing\n",
+        "\n\nleading blank lines",
+        "crlf\r\nline\r\nendings\r\n",
+        "multi\u{e9}byte \u{1f600}\nline \u{4e2d}\u{6587}\nend",
+    ] {
+        let bytes = src.as_bytes();
+        let index = LineIndex::new(bytes);
+        for offset in 0..=bytes.len() {
+            assert_eq!(
+                index.line_of(offset),
+                naive(bytes, offset),
+                "offset {offset} in {src:?}"
+            );
+        }
+    }
+    // A form after CRLF lines and a multibyte line keeps its line number.
+    let crlf = "#[test]\r\nfn f() {\r\n    // \u{e9}\u{1f600}\r\n    assert_oracle_parity_expect(r#\"(list 1)\"#, expect);\r\n}\r\n";
+    assert_eq!(
+        form_candidates(crlf)
+            .iter()
+            .map(|(line, _)| *line)
+            .collect::<Vec<_>>(),
+        [4]
+    );
 }
 
 /// The reader guard runs at `OracleSandbox::new`, before any `OracleMode`
