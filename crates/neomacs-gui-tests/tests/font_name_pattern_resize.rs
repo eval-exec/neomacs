@@ -27,6 +27,152 @@ fn gnu_hack_font_patterns_resolve_and_resize_frame() {
     run(Engine::Gnu);
 }
 
+#[test]
+fn face_font_fallback_xlfd_resize_matches_gnu_on_x11() {
+    let gnu = run_fallback_resize(Engine::Gnu);
+    let neo = run_fallback_resize(Engine::Neomacs);
+    assert_eq!(
+        neo, gnu,
+        "Neomacs face-font fallback resize diverged from GNU 31.1"
+    );
+    assert_eq!(
+        neo["faces"]["fixed-pitch-serif"]["face-font"],
+        "-PfEd-DejaVu Sans Mono-regular-normal-normal-*-14-*-*-*-m-0-iso10646-1",
+        "fixed-pitch-serif must resolve through face-font-family-alternatives: {neo}"
+    );
+    assert_eq!(
+        neo["faces"]["neo-672-missing-face"]["face-font"],
+        "-SRC-Hack-regular-normal-normal-*-14-*-*-*-m-0-iso10646-1",
+        "unmapped missing family must fall back via inherited SRC foundry to Hack: {neo}"
+    );
+}
+
+fn run_fallback_resize(engine: Engine) -> Value {
+    let root = neomacs_infra::workspace_root();
+    let (name, binary) = match engine {
+        Engine::Neomacs => {
+            let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.join("target/release/neomacs"));
+            let stamp = neomacs_test_env::fresh_build_stamp::verify(&binary, &root.join("lisp"))
+                .expect("native GUI binary requires its matching fresh-build stamp");
+            assert!(matches!(
+                stamp,
+                neomacs_test_env::fresh_build_stamp::StampVerdict::Verified { .. }
+            ));
+            ("native", binary)
+        }
+        Engine::Gnu => {
+            let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+            assert!(
+                oracle.is_attested(),
+                "GNU control requires the pinned reference"
+            );
+            let binary = oracle.executable_path();
+            let prefix = binary.parent().unwrap().parent().unwrap();
+            let check = std::process::Command::new("bash")
+                .arg(root.join("scripts/ci/check-gnu-oracle.sh"))
+                .arg(&binary)
+                .arg("31.1")
+                .arg(prefix.join("share/gnu-emacs-oracle/build-manifest"))
+                .arg("a360712c9d272d950d8d8255ef74570f7e90b7d9")
+                .output()
+                .expect("run prescribed GNU oracle check");
+            assert!(
+                check.status.success(),
+                "GNU oracle check failed:\n{}\n{}",
+                String::from_utf8_lossy(&check.stdout),
+                String::from_utf8_lossy(&check.stderr)
+            );
+            ("gnu", binary)
+        }
+    };
+    let artifacts = root.join(format!(
+        "target/neomacs-gui-tests/face-font-fallback-resize-{name}-{}-{}",
+        std::process::id(),
+        neomacs_gui_tests::unique_nonce()
+    ));
+    let fonts = artifacts.join("fonts");
+    fs::create_dir_all(&fonts).unwrap();
+    fs::copy(
+        neomacs_test_fonts::hack_regular_3_003(),
+        fonts.join("Hack-Regular.ttf"),
+    )
+    .unwrap();
+    fs::copy(
+        neomacs_test_fonts::dejavu_2_37().mono_regular(),
+        fonts.join("DejaVuSansMono.ttf"),
+    )
+    .unwrap();
+    let config = artifacts.join("fonts.conf");
+    fs::write(
+        &config,
+        format!(
+            "<fontconfig><dir>{}</dir><cachedir>{}</cachedir><alias><family>monospace</family><prefer><family>Hack</family></prefer></alias><alias><family>sans-serif</family><prefer><family>Hack</family></prefer></alias></fontconfig>",
+            fonts.display(),
+            artifacts.join("fontcache").display()
+        ),
+    )
+    .unwrap();
+    let session = DisplayHarness::Xvfb.start_session(&artifacts).unwrap();
+    let mut plan = GuiTestPlan::new(
+        GuiBackend::LinuxX11,
+        &root,
+        &artifacts,
+        GuiScenario::new(
+            "face-font-fallback-resize",
+            root.join("crates/neomacs-gui-tests/fixtures/face-font-fallback-resize.el"),
+        ),
+    )
+    .with_program(binary)
+    .with_env("FONTCONFIG_FILE", config.display().to_string())
+    .with_env("GDK_BACKEND", "x11")
+    .with_env("WINIT_UNIX_BACKEND", "x11");
+    for (key, value) in session.env() {
+        plan = plan.with_env(key, value);
+    }
+    let options = GuiRunOptions::with_timeout(Duration::from_secs(30));
+    let (artifacts, exit_code, timed_out) = match engine {
+        Engine::Neomacs => {
+            let result = plan
+                .run_with(&mut ProcessGuiCommandRunner, options)
+                .unwrap();
+            assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+            (result.artifacts, result.exit_code, result.timed_out)
+        }
+        Engine::Gnu => {
+            let artifacts = GuiArtifactSet::new(
+                &artifacts,
+                GuiBackend::LinuxX11,
+                "face-font-fallback-resize",
+            );
+            fs::create_dir_all(artifacts.json.parent().unwrap()).unwrap();
+            let mut command = plan.command_spec();
+            command
+                .env
+                .retain(|(key, _)| !key.starts_with("NEOMACS_") || key == "NEOMACS_GUI_STATE_JSON");
+            let output = ProcessGuiCommandRunner
+                .run(&command, &artifacts, &options)
+                .unwrap();
+            fs::write(&artifacts.stdout, &output.stdout).unwrap();
+            fs::write(&artifacts.stderr, &output.stderr).unwrap();
+            (artifacts, output.exit_code, output.timed_out)
+        }
+    };
+    let state = fs::read(&artifacts.gui_state)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    assert!(!timed_out, "artifacts={artifacts:#?}; state={state:?}");
+    assert_eq!(
+        exit_code,
+        Some(0),
+        "artifacts={artifacts:#?}; state={state:?}"
+    );
+    let state = state.expect("fixture must publish its face-font observations");
+    assert_eq!(state["passed"], true, "{state}");
+    state
+}
+
 fn run(engine: Engine) {
     let root = neomacs_infra::workspace_root();
     let (name, binary) = match engine {

@@ -540,3 +540,40 @@ fn box_line_width_cons_pair_preserves_gnu_horizontal_line_width() {
         other => panic!("expected box for direct (V . H) pair, got {other:?}"),
     }
 }
+
+#[test]
+fn ensure_startup_compat_variables_rehydrates_alternative_font_family_alist() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    // Clear the process-global table to simulate a freshly started process
+    // that has just loaded a pdump image containing `face-font-family-alternatives`.
+    let _ = builtin_internal_set_alternative_font_family_alist(&mut eval, vec![Value::NIL])
+        .expect("clear alternative families");
+    assert_eq!(
+        crate::emacs_core::font::capture_alternative_font_families("Monospace Serif")
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>(),
+        vec!["Monospace Serif"],
+    );
+
+    eval.set_variable(
+        "face-font-family-alternatives",
+        Value::list(vec![Value::list(vec![
+            Value::string("Monospace Serif"),
+            Value::string("Courier 10 Pitch"),
+            Value::string("FreeMono"),
+        ])]),
+    );
+
+    ensure_startup_compat_variables(&mut eval);
+
+    assert_eq!(
+        crate::emacs_core::font::capture_alternative_font_families("Monospace Serif")
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>(),
+        vec!["Monospace Serif", "Courier 10 Pitch", "FreeMono"],
+        "pdump startup must rehydrate process-global alternative font families from face-font-family-alternatives"
+    );
+}

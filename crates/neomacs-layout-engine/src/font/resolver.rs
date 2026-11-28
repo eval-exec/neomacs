@@ -1051,13 +1051,15 @@ impl FontResolver {
         size: FontSelectionSize,
     ) -> Option<PlatformFontMatch> {
         for family in families.search_order(|family| self.backend.resolve_family(family)) {
-            let scope = match family {
-                FontFamilyCandidate::Family(family) => {
-                    FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?)
-                }
+            let (scope, prefer_monospace, queried_family) = match &family {
+                FontFamilyCandidate::Family(family) => (
+                    FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?),
+                    self.family_prefers_monospace(family.as_ref()),
+                    Some(family.as_ref()),
+                ),
                 // This is GNU's family=nil enumeration, not a character's
                 // native fallback cascade or a generic monospace request.
-                FontFamilyCandidate::NativeFallback => FontCandidateScope::All,
+                FontFamilyCandidate::NativeFallback => (FontCandidateScope::All, false, None),
             };
             let query = FontCandidateQuery {
                 scope,
@@ -1090,8 +1092,8 @@ impl FontResolver {
                     slant,
                     width: Some(width),
                     spacing: None,
-                    prefer_monospace: false,
-                    queried_family: None,
+                    prefer_monospace,
+                    queried_family,
                     size,
                 };
                 if let Some(matched) = select_best_candidate(

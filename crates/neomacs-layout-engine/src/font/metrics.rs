@@ -465,8 +465,11 @@ fn normalize_shaped_advances(
 struct MetricsCacheKey {
     fontset: crate::font::fallback_order::FaceFontsetId,
     family: String,
+    foundry: Option<String>,
     weight: u16,
     italic: bool,
+    slant: u16,
+    width: u16,
     font_size_centipx: i32,
     device_scale_bits: u32,
     fontset_generation: u64,
@@ -668,15 +671,36 @@ impl MetricsCacheKey {
         device_scale: neomacs_display_protocol::geometry::DeviceScale,
         fontset_generation: u64,
     ) -> Self {
+        let slant = if italic {
+            FontSlant::Italic
+        } else {
+            FontSlant::Normal
+        };
         Self {
             fontset: crate::font::fallback_order::FaceFontsetId::default(),
             family: family.to_string(),
+            foundry: None,
             weight,
             italic,
+            slant: slant.gnu_numeric(),
+            width: FontWidth::Normal.gnu_numeric(),
             font_size_centipx: (font_size * 100.0) as i32,
             device_scale_bits: device_scale.get().to_bits(),
             fontset_generation,
         }
+    }
+
+    fn with_face_style(
+        mut self,
+        foundry: Option<&str>,
+        slant: FontSlant,
+        width: FontWidth,
+    ) -> Self {
+        self.foundry = foundry.filter(|value| !value.is_empty()).map(str::to_owned);
+        self.italic = slant.is_italic();
+        self.slant = slant.gnu_numeric();
+        self.width = width.gnu_numeric();
+        self
     }
 }
 
@@ -688,8 +712,11 @@ impl MetricsCacheKey {
 #[derive(Clone, Copy, Debug)]
 pub struct RealizedFaceFontSelection<'a> {
     family: &'a str,
+    foundry: Option<&'a str>,
     weight: u16,
     italic: bool,
+    slant: FontSlant,
+    width: FontWidth,
     font_size: f32,
     /// Realized fontset. `new` uses the implicit face so callers that are
     /// not measuring a frame face keep one shared order.
@@ -700,11 +727,34 @@ impl<'a> RealizedFaceFontSelection<'a> {
     pub fn new(family: &'a str, weight: u16, italic: bool, font_size: f32) -> Self {
         Self {
             family,
+            foundry: None,
             weight,
             italic,
+            slant: if italic {
+                FontSlant::Italic
+            } else {
+                FontSlant::Normal
+            },
+            width: FontWidth::Normal,
             font_size,
             fontset: crate::font::fallback_order::FaceFontsetId::default(),
         }
+    }
+
+    pub fn with_foundry(mut self, foundry: Option<&'a str>) -> Self {
+        self.foundry = foundry.filter(|value| !value.is_empty());
+        self
+    }
+
+    pub fn with_slant(mut self, slant: FontSlant) -> Self {
+        self.slant = slant;
+        self.italic = slant.is_italic();
+        self
+    }
+
+    pub fn with_width(mut self, width: FontWidth) -> Self {
+        self.width = width;
+        self
     }
 
     /// Name the ASCII face's realized fontset. `frame` keeps two frames'
@@ -1913,12 +1963,14 @@ impl FontMetricsService {
         &self,
         selection: RealizedFaceFontSelection<'_>,
     ) -> RealizedFaceFontCacheKey {
-        let mut key = self.cache_key(
-            selection.family,
-            selection.weight,
-            selection.italic,
-            selection.font_size,
-        );
+        let mut key = self
+            .cache_key(
+                selection.family,
+                selection.weight,
+                selection.italic,
+                selection.font_size,
+            )
+            .with_face_style(selection.foundry, selection.slant, selection.width);
         key.fontset = selection.fontset;
         key
     }
@@ -2297,22 +2349,50 @@ impl FontMetricsService {
         italic: bool,
         font_size: f32,
     ) -> Option<crate::font_backend::PlatformFontMatch> {
-        let key = self.cache_key(family, weight, italic, font_size);
-        if let Some(cached) = self.primary_match_cache.get(&key) {
-            return cached.clone();
-        }
         let requested_slant = if italic {
             FontSlant::Italic
         } else {
             FontSlant::Normal
         };
+        self.platform_face_match(
+            family,
+            None,
+            weight,
+            requested_slant,
+            FontWidth::Normal,
+            font_size,
+        )
+    }
+
+    fn platform_face_match(
+        &mut self,
+        family: &str,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        font_size: f32,
+    ) -> Option<crate::font_backend::PlatformFontMatch> {
+        // Synthetic `neomacs-pin-*` families are internal fontdb handles from
+        // `FontFileCache::pin_exact_face`; never route them into the native
+        // catalog's unconstrained fallback pass.
+        if family.starts_with("neomacs-pin-") {
+            return None;
+        }
+        let key = self
+            .cache_key(family, weight, slant.is_italic(), font_size)
+            .with_face_style(foundry, slant, width);
+        if let Some(cached) = self.primary_match_cache.get(&key) {
+            return cached.clone();
+        }
         let matched = self
             .font_resolver
-            .resolve_primary(
+            .resolve_face_font(
                 family,
+                foundry,
                 weight,
-                requested_slant,
-                FontWidth::Normal,
+                slant,
+                width,
                 self.selection_size(font_size),
             )
             .and_then(|matched| self.materialize_platform_match(matched));
@@ -2915,28 +2995,72 @@ impl FontMetricsService {
         italic: bool,
         font_size: f32,
     ) -> Option<LayoutFontHandle> {
-        let key = self.cache_key(family, weight, italic, font_size);
+        let slant = if italic {
+            FontSlant::Italic
+        } else {
+            FontSlant::Normal
+        };
+        self.materialized_font_for_face_style(
+            family,
+            None,
+            weight,
+            slant,
+            FontWidth::Normal,
+            font_size,
+        )
+    }
+
+    fn materialized_font_for_face_style(
+        &mut self,
+        family: &str,
+        foundry: Option<&str>,
+        weight: u16,
+        slant: FontSlant,
+        width: FontWidth,
+        font_size: f32,
+    ) -> Option<LayoutFontHandle> {
+        let key = self
+            .cache_key(family, weight, slant.is_italic(), font_size)
+            .with_face_style(foundry, slant, width);
         if let Some(cached) = self.resolved_face_font_cache.get(&key) {
             return cached.clone();
         }
-        let materialized = self.materialize_face_font(family, weight, italic, font_size);
+        let materialized =
+            self.materialize_face_font_style(family, foundry, weight, slant, width, font_size);
         self.resolved_face_font_cache
             .insert(key, materialized.clone());
         materialized
     }
 
-    fn materialize_face_font(
+    fn materialize_face_font_style(
         &mut self,
         family: &str,
+        foundry: Option<&str>,
         weight: u16,
-        italic: bool,
+        slant: FontSlant,
+        width: FontWidth,
         font_size: f32,
     ) -> Option<LayoutFontHandle> {
         // The platform-selected file/index is the primary face identity.
-        // Only the semantic fallback path needs a representative-glyph probe.
-        let resolved_family = self.resolve_family(&self.font_resolver.resolve_family(family), None);
-        let platform = self.platform_primary_match(&resolved_family, weight, italic, font_size);
-        self.materialize_platform_selection(platform, &resolved_family, weight, italic, font_size)
+        // Pass the raw Lisp face family into GNU `font_find_for_lface`
+        // (`resolve_face_font`) so `face-font-family-alternatives` and
+        // inherited foundry preferences are consulted before fallback.
+        let platform = self.platform_face_match(family, foundry, weight, slant, width, font_size);
+        let fallback_family = platform
+            .as_ref()
+            .map(|matched| matched.metadata.family.as_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                self.resolve_family(&self.font_resolver.resolve_family(family), None)
+            });
+        self.materialize_platform_selection(
+            platform,
+            &fallback_family,
+            weight,
+            slant.is_italic(),
+            font_size,
+        )
     }
 
     /// Materialize one already-selected platform face (or the family fallback
@@ -2997,23 +3121,38 @@ impl FontMetricsService {
             weight,
             italic,
         );
-        let (file, face_index, postscript_name, style, stretch) = {
+        let (file, face_index, fontdb_family, postscript_name, style, stretch) = {
             let face = self.font_system.db().face(font_id)?;
             (
                 fontdb_face_file(face),
                 face.index,
+                face.families
+                    .first()
+                    .map(|(name, _)| name.clone())
+                    .filter(|name| !name.is_empty()),
                 Some(face.post_script_name.clone()).filter(|name| !name.is_empty()),
                 face.style,
                 face.stretch,
             )
         };
+        // Record the actually opened font's family rather than an unresolved
+        // requested face family (such as "Monospace Serif"), matching GNU
+        // `Fface_font` returning `fface->font->props[FONT_NAME_INDEX]` and
+        // preventing `font_instances` from caching a bogus family name.
+        let opened_family = platform
+            .as_ref()
+            .map(|matched| matched.metadata.family.as_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .or(fontdb_family)
+            .unwrap_or_else(|| resolved_family.to_owned());
         // fontdb Source::Binary faces have no path; key on the postscript
         // name (or family) so the identity is still durable.
         let selected_identity = self.fontdb_face_identity(
             file.as_deref(),
             face_index,
             postscript_name.clone(),
-            resolved_family,
+            &opened_family,
         );
         let selected_asset = file
             .as_deref()
@@ -3093,7 +3232,7 @@ impl FontMetricsService {
         self.observe_opened_font_vertical_metrics(vertical);
         let font = self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
-                family: resolved_family.to_owned(),
+                family: opened_family,
                 full_name: None,
                 postscript_name,
                 // Preserve the resolved CSS weight, not the container face's
@@ -3164,11 +3303,16 @@ impl FontMetricsService {
             &replay,
         );
         self.observe_opened_font_metrics(px_metrics.ascent, px_metrics.descent);
+        let opened_family = if !matched.metadata.family.is_empty() {
+            matched.metadata.family.as_str()
+        } else {
+            family
+        };
         let font = self
             .font_instances
             .intern(identity, replay, effective_size, || {
                 FontInstanceProperties {
-                    family: family.to_owned(),
+                    family: opened_family.to_owned(),
                     full_name: None,
                     postscript_name: matched.identity.postscript_name.clone(),
                     weight: matched.weight().unwrap_or(requested_weight),
@@ -3340,10 +3484,12 @@ impl FontMetricsService {
         selection: RealizedFaceFontSelection<'_>,
     ) -> Option<LayoutFontHandle> {
         if ch.is_ascii() {
-            return self.materialized_font_for_face(
+            return self.materialized_font_for_face_style(
                 selection.family,
+                selection.foundry,
                 selection.weight,
-                selection.italic,
+                selection.slant,
+                selection.width,
                 selection.font_size,
             );
         }
@@ -3352,10 +3498,12 @@ impl FontMetricsService {
         // symbol covered by this realized face's ASCII font stays on that font
         // before the base fontset is consulted.
         if self.symbol_font_policy.uses_primary_font_for(ch)
-            && let Some(primary) = self.materialized_font_for_face(
+            && let Some(primary) = self.materialized_font_for_face_style(
                 selection.family,
+                selection.foundry,
                 selection.weight,
-                selection.italic,
+                selection.slant,
+                selection.width,
                 selection.font_size,
             )
             && self.materialized_font_has_char(&primary, ch)
@@ -3481,11 +3629,18 @@ impl FontMetricsService {
                 face.stretch,
             )
         };
+        let opened_family = resolved
+            .platform
+            .as_ref()
+            .map(|matched| matched.metadata.family.as_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| resolved.family.clone());
         let selected_identity = self.fontdb_face_identity(
             file.as_deref(),
             face_index,
             postscript_name.clone(),
-            &resolved.family,
+            &opened_family,
         );
         let selected_asset = file
             .as_deref()
@@ -3540,7 +3695,7 @@ impl FontMetricsService {
             .font_instances
             .intern(identity, replay, selection.font_size, || {
                 FontInstanceProperties {
-                    family: resolved.family.clone(),
+                    family: opened_family,
                     full_name: None,
                     postscript_name,
                     weight: resolved.weight,
@@ -3981,20 +4136,24 @@ impl FontMetricsService {
         ch: char,
         selection: RealizedFaceFontSelection<'_>,
     ) -> ResolvedCharFont {
-        let requested_slant = if selection.italic {
-            FontSlant::Italic
-        } else {
-            FontSlant::Normal
-        };
+        let requested_slant = selection.slant;
         if ch.is_ascii() {
-            let resolved_family =
-                self.resolve_family(&self.font_resolver.resolve_family(selection.family), None);
-            let platform = self.platform_primary_match(
-                &resolved_family,
+            let platform = self.platform_face_match(
+                selection.family,
+                selection.foundry,
                 selection.weight,
-                selection.italic,
+                selection.slant,
+                selection.width,
                 selection.font_size,
             );
+            let resolved_family = platform
+                .as_ref()
+                .map(|matched| matched.metadata.family.as_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    self.resolve_family(&self.font_resolver.resolve_family(selection.family), None)
+                });
             // Snap to the family's available/instance weight, matching the
             // font actually opened (and what `build_attrs` renders with), so
             // `font-at` reports the opened instance's weight like GNU — e.g.

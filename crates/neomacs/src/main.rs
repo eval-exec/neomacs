@@ -2702,16 +2702,26 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         };
         let requested_family_storage = request.face.family_runtime_string_owned();
         let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
+        let requested_foundry = request
+            .face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()));
         let requested_weight = request
             .face
             .weight
             .unwrap_or(FontWeight::NORMAL)
             .css_weight();
-        let requested_italic = request
+        let requested_slant = request
             .face
             .slant
-            .map(|slant| slant.is_italic())
-            .unwrap_or(false);
+            .unwrap_or(neovm_core::face::FontSlant::Normal);
+        let requested_width = request
+            .face
+            .width
+            .unwrap_or(neovm_core::face::FontWidth::Normal);
+        let requested_italic = requested_slant.is_italic();
         let font_size = self.font_sizing.font_size_px_for_face(&request.face);
         let selected = self
             .synchronized_font_metrics()
@@ -2725,7 +2735,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     request.frame_id.0,
                     request.realized_face_id,
                     request.realized_face_epoch,
-                ),
+                )
+                .with_foundry(requested_foundry.as_deref())
+                .with_slant(requested_slant)
+                .with_width(requested_width),
             );
         tracing::debug!(
             target: "neomacs::font_at",

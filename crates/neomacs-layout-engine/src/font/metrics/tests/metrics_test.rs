@@ -5778,3 +5778,207 @@ fn linux_real_fontconfig_and_freetype_probe_cached_across_repeat_font_info_open(
         "clear_caches must invalidate opened_identity_cache and re-probe FreeType"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn face_primary_consults_alternative_families_and_records_opened_family() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(internal-set-alternative-font-family-alist
+            '(("Monospace Serif" "Courier 10 Pitch" "DejaVu Sans Mono")))"#,
+    )
+    .expect("alternative font family alist");
+    let hack = test_font_path(neomacs_test_fonts::hack_regular_3_003().to_path_buf());
+    let dejavu = test_font_path(
+        neomacs_test_fonts::dejavu_2_37()
+            .mono_regular()
+            .to_path_buf(),
+    );
+
+    struct AlternativeFaceBackend {
+        hack: String,
+        dejavu: String,
+    }
+
+    impl crate::font_backend::FontBackend for AlternativeFaceBackend {
+        fn kind(&self) -> FontBackendKind {
+            FontBackendKind::Fontconfig
+        }
+
+        fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+            vec![
+                crate::font_backend::FontFamilyName::new("Hack").unwrap(),
+                crate::font_backend::FontFamilyName::new("DejaVu Sans Mono").unwrap(),
+            ]
+        }
+
+        fn resolve_family(&self, family: &str) -> String {
+            if family.eq_ignore_ascii_case("Monospace") {
+                "Hack".to_owned()
+            } else {
+                family.to_owned()
+            }
+        }
+
+        fn family_prefers_monospace(&self, family: &str) -> bool {
+            family.eq_ignore_ascii_case("Monospace")
+                || family.eq_ignore_ascii_case("Hack")
+                || family.eq_ignore_ascii_case("DejaVu Sans Mono")
+        }
+
+        fn list_candidates(
+            &self,
+            query: &crate::font_backend::FontCandidateQuery,
+        ) -> Vec<crate::font_backend::FontCandidate> {
+            let hack_candidate = crate::font_backend::FontCandidate {
+                matched: platform_file_candidate(
+                    ResolvedFontIdentity::from_file(&self.hack, 0, None),
+                    crate::font_backend::PlatformFontMetadata {
+                        foundry: Some("SRC".to_owned()),
+                        family: "Hack".to_owned(),
+                        weight: Some(400),
+                        slant: FontSlant::Normal,
+                        width: Some(FontWidth::Normal),
+                        spacing: Some(100),
+                        design_metrics: None,
+                        size: crate::font_backend::PlatformFontSize::Scalable,
+                    },
+                ),
+            };
+            let dejavu_candidate = crate::font_backend::FontCandidate {
+                matched: platform_file_candidate(
+                    ResolvedFontIdentity::from_file(&self.dejavu, 0, None),
+                    crate::font_backend::PlatformFontMetadata {
+                        foundry: Some("PfEd".to_owned()),
+                        family: "DejaVu Sans Mono".to_owned(),
+                        weight: Some(400),
+                        slant: FontSlant::Normal,
+                        width: Some(FontWidth::Normal),
+                        spacing: Some(100),
+                        design_metrics: None,
+                        size: crate::font_backend::PlatformFontSize::Scalable,
+                    },
+                ),
+            };
+            match query.scope.queried_family() {
+                Some(family) if family.eq_ignore_ascii_case("Hack") => vec![hack_candidate],
+                Some(family) if family.eq_ignore_ascii_case("DejaVu Sans Mono") => {
+                    vec![dejavu_candidate]
+                }
+                Some(_) => Vec::new(),
+                None => vec![dejavu_candidate, hack_candidate],
+            }
+        }
+
+        fn advance_catalog_generation(&mut self) {}
+
+        fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+            crate::font::catalog::FontCatalogChange::Unchanged
+        }
+    }
+
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(AlternativeFaceBackend {
+            hack: hack.clone(),
+            dejavu: dejavu.clone(),
+        }));
+    svc.font_system.db_mut().load_font_file(&hack).unwrap();
+    svc.font_system.db_mut().load_font_file(&dejavu).unwrap();
+
+    // `fixed-pitch-serif` requests "Monospace Serif" while inheriting `:foundry "SRC"`
+    // from `default`; GNU `font_find_for_lface` walks `face-font-family-alternatives`
+    // (relaxing foundry per family) and records the opened font's real family
+    // ("DejaVu Sans Mono").
+    let serif_mono = svc
+        .select_font_for_realized_face_char(
+            'M',
+            RealizedFaceFontSelection::new("Monospace Serif", 400, false, 14.0)
+                .with_foundry(Some("SRC")),
+        )
+        .expect("fixed-pitch-serif must resolve through alternative families");
+    assert_eq!(serif_mono.resolved.family, "DejaVu Sans Mono");
+    assert_eq!(
+        serif_mono.resolved.identity.file_path.as_deref(),
+        Some(dejavu.as_str())
+    );
+
+    // A missing family with no alternative falls back to the unconstrained
+    // catalog, preferring the face's inherited `:foundry "SRC"` ("Hack") over
+    // earlier candidates ("DejaVu Sans Mono"), without stamping the unresolved
+    // family name onto the opened font instance.
+    let missing = svc
+        .select_font_for_realized_face_char(
+            'M',
+            RealizedFaceFontSelection::new("NoSuchFamilyFor672", 400, false, 14.0)
+                .with_foundry(Some("SRC")),
+        )
+        .expect("missing family must resolve via native fallback");
+    assert_eq!(missing.resolved.family, "Hack");
+    assert_eq!(
+        missing.resolved.identity.file_path.as_deref(),
+        Some(hack.as_str())
+    );
+    drop(eval);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fontdb_fallback_records_opened_font_family_without_poisoning_instance_cache() {
+    let hack = test_font_path(neomacs_test_fonts::hack_regular_3_003().to_path_buf());
+
+    struct EmptyCandidateBackend;
+
+    impl crate::font_backend::FontBackend for EmptyCandidateBackend {
+        fn kind(&self) -> FontBackendKind {
+            FontBackendKind::Fontconfig
+        }
+
+        fn list_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
+            Vec::new()
+        }
+
+        fn resolve_family(&self, family: &str) -> String {
+            family.to_owned()
+        }
+
+        fn family_prefers_monospace(&self, _family: &str) -> bool {
+            false
+        }
+
+        fn list_candidates(
+            &self,
+            _query: &crate::font_backend::FontCandidateQuery,
+        ) -> Vec<crate::font_backend::FontCandidate> {
+            Vec::new()
+        }
+
+        fn advance_catalog_generation(&mut self) {}
+
+        fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+            crate::font::catalog::FontCatalogChange::Unchanged
+        }
+    }
+
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(EmptyCandidateBackend));
+    svc.font_system.db_mut().load_font_file(&hack).unwrap();
+
+    // When platform matching returns None and fontdb opens a fallback face,
+    // `materialize_platform_selection` must record that opened font's real
+    // family (never "Monospace Serif"), and must not poison `font_instances`
+    // for later faces opening the same file.
+    let first = svc
+        .select_font_for_char('M', "Monospace Serif", 400, false, 14.0)
+        .expect("fontdb fallback must open a loaded face");
+    assert!(!first.resolved.family.is_empty());
+    assert_ne!(first.resolved.family, "Monospace Serif");
+
+    let second = svc
+        .select_font_for_char('M', "NoSuchFamilyFor672", 400, false, 14.0)
+        .expect("second missing family must reuse opened face cleanly");
+    assert_eq!(second.resolved.family, first.resolved.family);
+    assert_ne!(second.resolved.family, "NoSuchFamilyFor672");
+    assert_ne!(second.resolved.family, "Monospace Serif");
+}
