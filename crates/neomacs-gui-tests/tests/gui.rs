@@ -169,6 +169,9 @@ mod frame_cursor_type_gui_oracle;
 #[path = "frame_native_title_gui_oracle.rs"]
 mod frame_native_title_gui_oracle;
 
+#[path = "drag_selection_motion_gui_oracle.rs"]
+mod drag_selection_motion_gui_oracle;
+
 #[path = "frame_text_height_gui_oracle.rs"]
 mod frame_text_height_gui_oracle;
 
@@ -366,3 +369,7 @@ mod disabled_effects_idle;
 
 #[path = "timing_assertion_ratchet.rs"]
 mod timing_assertion_ratchet;
+
+#[cfg(target_os = "linux")]
+#[path = "wayland_drag_selection.rs"]
+mod wayland_drag_selection;

@@ -488,3 +488,135 @@ fn image_state_change_preserves_identity_and_reason_as_internal_input() {
         Some(InternalFrontendEvent::ImageStateChanged { event })
     );
 }
+
+#[test]
+fn consecutive_mouse_moves_with_presented_regions_coalesce_to_latest_before_release() {
+    use crate::emacs_core::eval::keyboard::Modifiers;
+    let mut queue = FrontendEventQueue::default();
+    for i in 0..200_u32 {
+        let x = 10.0 + i as f32;
+        let y = 20.0 + i as f32;
+        queue.push_back(InputEvent::PresentedRegion {
+            presentation: 7,
+            hit: None,
+            x,
+            y,
+            target_frame_id: 42,
+        });
+        queue.push_back(InputEvent::MouseMove {
+            x,
+            y,
+            modifiers: Modifiers::none(),
+            target_frame_id: 42,
+        });
+    }
+    queue.push_back(InputEvent::PresentedRegion {
+        presentation: 7,
+        hit: None,
+        x: 209.0,
+        y: 219.0,
+        target_frame_id: 42,
+    });
+    queue.push_back(InputEvent::MouseRelease {
+        button: crate::emacs_core::eval::keyboard::MouseButton::Left,
+        x: 209.0,
+        y: 219.0,
+        target_frame_id: 42,
+    });
+
+    assert_eq!(
+        queue.len(),
+        4,
+        "200 move pairs + 1 release pair must collapse to [PR(last), Move(last), PR(rel), Rel]"
+    );
+    assert_eq!(
+        queue.take_leading_internal(),
+        Some(InternalFrontendEvent::PresentedRegion {
+            presentation: 7,
+            hit: None,
+            x: 209.0,
+            y: 219.0,
+            target_frame_id: 42,
+        })
+    );
+    assert!(matches!(
+        queue.pop_visible_front(),
+        Some(InputEvent::MouseMove {
+            x,
+            y,
+            target_frame_id: 42,
+            ..
+        }) if x == 209.0 && y == 219.0
+    ));
+    assert_eq!(
+        queue.take_leading_internal(),
+        Some(InternalFrontendEvent::PresentedRegion {
+            presentation: 7,
+            hit: None,
+            x: 209.0,
+            y: 219.0,
+            target_frame_id: 42,
+        })
+    );
+    assert!(matches!(
+        queue.pop_visible_front(),
+        Some(InputEvent::MouseRelease {
+            x,
+            y,
+            target_frame_id: 42,
+            ..
+        }) if x == 209.0 && y == 219.0
+    ));
+    assert!(queue.is_empty());
+}
+
+#[test]
+fn mouse_move_coalescing_respects_non_motion_barriers_and_frame_boundaries() {
+    use crate::emacs_core::eval::keyboard::Modifiers;
+    let mut queue = FrontendEventQueue::default();
+    queue.push_back(InputEvent::MouseMove {
+        x: 1.0,
+        y: 2.0,
+        modifiers: Modifiers::none(),
+        target_frame_id: 1,
+    });
+    queue.push_back(InputEvent::MouseMove {
+        x: 3.0,
+        y: 4.0,
+        modifiers: Modifiers::none(),
+        target_frame_id: 1,
+    });
+    queue.push_back(InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+    ));
+    queue.push_back(InputEvent::MouseMove {
+        x: 5.0,
+        y: 6.0,
+        modifiers: Modifiers::none(),
+        target_frame_id: 1,
+    });
+    queue.push_back(InputEvent::MouseMove {
+        x: 7.0,
+        y: 8.0,
+        modifiers: Modifiers::none(),
+        target_frame_id: 2,
+    });
+
+    assert_eq!(queue.len(), 4);
+    assert!(matches!(
+        queue.pop_visible_front(),
+        Some(InputEvent::MouseMove { x, y, target_frame_id: 1, .. }) if x == 3.0 && y == 4.0
+    ));
+    assert!(matches!(
+        queue.pop_visible_front(),
+        Some(InputEvent::KeyPress { .. })
+    ));
+    assert!(matches!(
+        queue.pop_visible_front(),
+        Some(InputEvent::MouseMove { x, y, target_frame_id: 1, .. }) if x == 5.0 && y == 6.0
+    ));
+    assert!(matches!(
+        queue.pop_visible_front(),
+        Some(InputEvent::MouseMove { x, y, target_frame_id: 2, .. }) if x == 7.0 && y == 8.0
+    ));
+}

@@ -4939,9 +4939,51 @@ fn run_gui_evaluator_worker(
                         continue;
                     }
                 };
-                match input_publisher.publish_display(&event) {
+                // Coalesce immediately available consecutive same-frame pointer
+                // moves before crossing the evaluator channel while strictly
+                // preserving ordering relative to any following non-move event
+                // (such as button press/release or key input).
+                let mut current = event;
+                let mut trailing = None;
+                if let neomacs_display_runtime::thread_comm::InputEvent::PositionedPointer(
+                    neomacs_display_runtime::thread_comm::PositionedPointerInput {
+                        position,
+                        action: neomacs_display_runtime::thread_comm::PointerAction::Move { .. },
+                        ..
+                    },
+                ) = &current
+                {
+                    let target_fid = position.target_frame_id;
+                    while let Ok(next) = display_input_rx.try_recv() {
+                        match &next {
+                            neomacs_display_runtime::thread_comm::InputEvent::PositionedPointer(
+                                neomacs_display_runtime::thread_comm::PositionedPointerInput {
+                                    position: next_pos,
+                                    action:
+                                        neomacs_display_runtime::thread_comm::PointerAction::Move {
+                                            ..
+                                        },
+                                    ..
+                                },
+                            ) if next_pos.target_frame_id == target_fid => {
+                                current = next;
+                            }
+                            _ => {
+                                trailing = Some(next);
+                                break;
+                            }
+                        }
+                    }
+                }
+                match input_publisher.publish_display(&current) {
                     Publication::Delivered => {}
                     Publication::ReceiverClosed => break,
+                }
+                if let Some(trailing) = trailing {
+                    match input_publisher.publish_display(&trailing) {
+                        Publication::Delivered => {}
+                        Publication::ReceiverClosed => break,
+                    }
                 }
             }
         })

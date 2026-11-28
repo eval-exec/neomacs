@@ -87,7 +87,51 @@ impl FrontendEventQueue {
 
     #[doc(hidden)]
     pub fn push_back(&mut self, event: InputEvent) {
+        if let InputEvent::MouseMove {
+            x,
+            y,
+            target_frame_id,
+            ..
+        } = &event
+        {
+            self.coalesce_trailing_mouse_move(*x, *y, *target_frame_id);
+        }
         self.events.push_back(event);
+    }
+
+    /// Collapse consecutive plain `MouseMove` events (and their paired
+    /// `PresentedRegion` observations) on the same frame to the latest
+    /// coordinates. Any intervening non-motion event acts as an ordering
+    /// barrier so the final motion before a click/release/key is preserved.
+    fn coalesce_trailing_mouse_move(&mut self, cur_x: f32, cur_y: f32, cur_frame_id: u64) {
+        let cur_presented = self
+            .events
+            .back()
+            .is_some_and(|tail| is_matching_presented_region(tail, cur_x, cur_y, cur_frame_id))
+            .then(|| self.events.pop_back().expect("tail checked"));
+
+        let replaced_prev = match self.events.back() {
+            Some(InputEvent::MouseMove {
+                x,
+                y,
+                target_frame_id,
+                ..
+            }) if *target_frame_id == cur_frame_id => Some((*x, *y, *target_frame_id)),
+            _ => None,
+        };
+
+        if let Some((prev_x, prev_y, prev_frame_id)) = replaced_prev {
+            self.events.pop_back();
+            if self.events.back().is_some_and(|tail| {
+                is_matching_presented_region(tail, prev_x, prev_y, prev_frame_id)
+            }) {
+                self.events.pop_back();
+            }
+        }
+
+        if let Some(presented) = cur_presented {
+            self.events.push_back(presented);
+        }
     }
 
     #[doc(hidden)]
@@ -316,6 +360,18 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
 
 pub(crate) fn is_internal(event: &InputEvent) -> bool {
     matches!(semantics(event), FrontendEventSemantics::Internal(_))
+}
+
+fn is_matching_presented_region(event: &InputEvent, x: f32, y: f32, target_frame_id: u64) -> bool {
+    matches!(
+        event,
+        InputEvent::PresentedRegion {
+            x: rx,
+            y: ry,
+            target_frame_id: rfid,
+            ..
+        } if *rfid == target_frame_id && rx.to_bits() == x.to_bits() && ry.to_bits() == y.to_bits()
+    )
 }
 
 pub(crate) fn interrupts(event: &InputEvent) -> bool {

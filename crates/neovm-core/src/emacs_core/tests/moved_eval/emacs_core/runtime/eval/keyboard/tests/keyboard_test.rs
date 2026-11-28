@@ -801,8 +801,6 @@ fn region_observed_at(
 
 #[test]
 fn tracked_mouse_motion_ignores_keyboard_modifiers_but_keeps_position() {
-    let (mut eval, frame_id, _) = frame_with_a_divider();
-    eval.eval_str("(setq track-mouse t)").unwrap();
     let mut plain_position = None;
     for modifiers in [
         Modifiers::none(),
@@ -816,6 +814,12 @@ fn tracked_mouse_motion_ignores_keyboard_modifiers_but_keeps_position() {
             alt: true,
         },
     ] {
+        // A fresh frame per variant: GNU reports a movement only when the
+        // pointer leaves the glyph it was last over (`x_note_mouse_movement`,
+        // xterm.c:14740-14773), so a repeated motion at the same position in
+        // one session is no event at all. Each variant here is a first motion.
+        let (mut eval, frame_id, _) = frame_with_a_divider();
+        eval.eval_str("(setq track-mouse t)").unwrap();
         let event = eval
             .handle_read_char_input_event(
                 InputEvent::MouseMove {
@@ -831,11 +835,9 @@ fn tracked_mouse_motion_ignores_keyboard_modifiers_but_keeps_position() {
         assert_eq!(event.cons_car(), Value::symbol("mouse-movement"));
         let position = event.cons_cdr().cons_car();
         let xy = position.cons_cdr().cons_cdr().cons_car();
-        let position = (
-            position.cons_car(),
-            xy.cons_car().as_fixnum(),
-            xy.cons_cdr().as_fixnum(),
-        );
+        // Each variant has its own frame, so only the pixel position is
+        // comparable across them.
+        let position = (xy.cons_car().as_fixnum(), xy.cons_cdr().as_fixnum());
         if let Some(expected) = plain_position {
             assert_eq!(
                 position, expected,

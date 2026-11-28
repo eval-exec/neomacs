@@ -4597,11 +4597,43 @@ impl crate::emacs_core::eval::Context {
     /// Mirrors GNU Emacs `read_char()` (keyboard.c:2489).
     /// This is THE blocking point in the command loop.
     /// Before blocking, triggers redisplay.
+    /// Move the motion events already waiting on `input_rx` (and their
+    /// `PresentedRegion` observations) into the pending queue, stopping after
+    /// the first other event, which is queued behind them.
+    fn pull_ready_motion_into_pending_queue(&mut self) {
+        let Some(rx) = self.input_rx.as_ref().cloned() else {
+            return;
+        };
+        loop {
+            match rx.try_recv() {
+                Ok(event) => {
+                    let motion = matches!(
+                        event,
+                        InputEvent::MouseMove { .. } | InputEvent::PresentedRegion { .. }
+                    );
+                    self.command_loop
+                        .keyboard
+                        .pending_input_events
+                        .push_back(event);
+                    if !motion {
+                        return;
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => return,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    self.handle_display_terminal_disconnect();
+                    return;
+                }
+            }
+        }
+    }
+
     #[doc(hidden)]
     pub fn drain_ready_input_event_for_read_char(
         &mut self,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<Option<InputEvent>, neovm_value::error::Flow> {
+        let mut motion_coalesced = false;
         loop {
             self.service_leading_internal_frontend_events();
             self.stage_pending_thread_events()?;
@@ -4611,6 +4643,25 @@ impl crate::emacs_core::eval::Context {
                 .pending_input_events
                 .pop_visible_front()
             {
+                if !motion_coalesced
+                    && matches!(event, InputEvent::MouseMove { .. })
+                    && self.command_loop.keyboard.pending_input_events.is_empty()
+                {
+                    // GNU keeps motion in one `mouse_moved` flag, so a burst
+                    // that arrived while Lisp was busy is read as its latest
+                    // position (keyboard.c, xterm.c x_note_mouse_movement).
+                    // Pull only the motion that is already waiting, with its
+                    // paired observations; the queue's push_back keeps the
+                    // latest. The first other event stops the pull and stays
+                    // queued after it, so nothing is reordered.
+                    motion_coalesced = true;
+                    self.command_loop
+                        .keyboard
+                        .pending_input_events
+                        .push_back(event);
+                    self.pull_ready_motion_into_pending_queue();
+                    continue;
+                }
                 idle_policy.stop_idle(self);
                 return Ok(Some(event));
             }
@@ -5156,6 +5207,7 @@ impl crate::emacs_core::eval::Context {
                 modifiers,
                 target_frame_id,
             } => {
+                self.forget_last_mouse_glyph();
                 self.clear_current_message_for_keyboard_input();
                 // A drag of a window edge begins here, at the moment the
                 // command loop consumes the press rather than the moment the
@@ -5202,6 +5254,7 @@ impl crate::emacs_core::eval::Context {
                 y,
                 target_frame_id,
             } => {
+                self.forget_last_mouse_glyph();
                 self.clear_current_message_for_keyboard_input();
                 self.window_edge_drag.released(button);
                 // GNU keeps one down position per button and clears it on
@@ -5251,6 +5304,7 @@ impl crate::emacs_core::eval::Context {
                 modifiers,
                 target_frame_id,
             } => {
+                self.forget_last_mouse_glyph();
                 if !delta_x.is_finite()
                     || !delta_y.is_finite()
                     || (delta_x == 0.0 && delta_y == 0.0)
@@ -5295,6 +5349,7 @@ impl crate::emacs_core::eval::Context {
                 modifiers,
                 target_frame_id,
             } => {
+                self.forget_last_mouse_glyph();
                 if !delta_x.is_finite()
                     || !delta_y.is_finite()
                     || (delta_x == 0.0 && delta_y == 0.0)
@@ -5482,6 +5537,10 @@ impl crate::emacs_core::eval::Context {
                 self.note_mouse_move_input_event(x, y, target_frame_id);
                 idle_policy.resume_idle(self);
                 if !self.track_mouse_enabled() {
+                    self.forget_last_mouse_glyph();
+                    return Ok(None);
+                }
+                if !self.should_emit_mouse_movement(x, y, target_frame_id) {
                     return Ok(None);
                 }
                 self.clear_current_message_for_keyboard_input();
@@ -6092,6 +6151,116 @@ impl crate::emacs_core::eval::Context {
             x.round() as i64,
             y.round() as i64,
         );
+    }
+
+    fn mouse_fine_grained_tracking_enabled(&self) -> bool {
+        let fine_grained = self
+            .variables()
+            .value_in_buffer(
+                self.edit.buffers.current_buffer(),
+                intern("mouse-fine-grained-tracking"),
+            )
+            .unwrap_or(Value::NIL)
+            .is_truthy();
+        if fine_grained {
+            return true;
+        }
+        // GNU `remember_mouse_glyph` (`src/xdisp.c:2800`) also uses 1x1 pixel
+        // boxes when `window-resize-pixelwise` is non-nil.
+        self.variables()
+            .value_in_buffer(
+                self.edit.buffers.current_buffer(),
+                intern("window-resize-pixelwise"),
+            )
+            .unwrap_or(Value::NIL)
+            .is_truthy()
+    }
+
+    /// GNU `note_mouse_movement` + `remember_mouse_glyph`
+    /// (`src/pgtkterm.c:5899-5947`, `src/xdisp.c:2789-2820`): suppress
+    /// redundant `mouse-movement` events while the pointer remains within the
+    /// last reported glyph bounding box on the same frame and presentation.
+    fn should_emit_mouse_movement(&mut self, x: f32, y: f32, target_frame_id: u64) -> bool {
+        let Some(frame_id) = self.resolve_input_frame_id(target_frame_id) else {
+            self.forget_last_mouse_glyph();
+            return true;
+        };
+        let Some(frame) = self.frames.get(frame_id) else {
+            self.forget_last_mouse_glyph();
+            return true;
+        };
+        let px = x.round() as i64;
+        let py = y.round() as i64;
+        let presentation_id = frame.active_presentation().map(|id| id.get());
+        let fine_grained = self.mouse_fine_grained_tracking_enabled();
+
+        if let Some(prev) = frame.last_mouse_glyph
+            && prev.contains(px, py)
+        {
+            if !fine_grained || (prev.width <= 1 && prev.height <= 1) {
+                return false;
+            }
+        }
+
+        let (rx, ry, rw, rh) = if fine_grained {
+            (px, py, 1, 1)
+        } else {
+            let presented_rect = self
+                .command_loop
+                .keyboard
+                .kboard
+                .presented_mouse_observation
+                .filter(|obs| {
+                    obs.frame_id == frame_id.0
+                        && obs.x.to_bits() == x.to_bits()
+                        && obs.y.to_bits() == y.to_bits()
+                        && presentation_id == Some(obs.presentation)
+                })
+                .and_then(|obs| obs.hit)
+                .and_then(|hit| hit.text_position())
+                .and_then(|point| {
+                    let bounds = point.bounds();
+                    let bx = bounds.x().floor() as i64;
+                    let by = bounds.y().floor() as i64;
+                    let bw = bounds.width().ceil().max(1.0) as i64;
+                    let bh = bounds.height().ceil().max(1.0) as i64;
+                    (px >= bx
+                        && px < bx.saturating_add(bw)
+                        && py >= by
+                        && py < by.saturating_add(bh))
+                    .then_some((bx, by, bw, bh))
+                });
+            presented_rect.unwrap_or_else(|| {
+                let cw = frame.char_width.max(1.0).round() as i64;
+                let ch = frame.char_height.max(1.0).round() as i64;
+                (px.div_euclid(cw) * cw, py.div_euclid(ch) * ch, cw, ch)
+            })
+        };
+
+        // One remembered glyph per display (GNU `last_mouse_glyph_frame`):
+        // motion on this frame forgets any other frame's rectangle.
+        self.forget_last_mouse_glyph();
+        if let Some(frame) = self.frames.get_mut(frame_id) {
+            frame.last_mouse_glyph = Some(
+                crate::emacs_core::eval::data::command_loop::LastMouseMotionGlyph {
+                    x: rx,
+                    y: ry,
+                    width: rw,
+                    height: rh,
+                },
+            );
+        }
+        true
+    }
+
+    /// Forget the remembered mouse glyph on every frame, as GNU clears
+    /// `last_mouse_glyph_frame` (the next motion reports a movement).
+    fn forget_last_mouse_glyph(&mut self) {
+        for frame_id in self.frames.frame_list() {
+            if let Some(frame) = self.frames.get_mut(frame_id) {
+                frame.last_mouse_glyph = None;
+            }
+        }
     }
 
     #[doc(hidden)]

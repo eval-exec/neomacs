@@ -3516,6 +3516,172 @@ fn read_char_mouse_move_updates_mouse_position_even_without_track_mouse() {
 }
 
 #[test]
+fn read_char_coalesces_pending_mouse_move_burst_and_preserves_final_endpoint_before_release() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    ev.obarray_mut().set_symbol_value("track-mouse", Value::T);
+    let tx = HostInputPublisher::install(&mut ev);
+
+    // Start a drag with button press, then deliver a burst of 200 motion
+    // events while the evaluator is busy, followed immediately by release.
+    tx.send(crate::keyboard::InputEvent::MousePress {
+        button: crate::keyboard::MouseButton::Left,
+        x: 10.0,
+        y: 20.0,
+        modifiers: crate::keyboard::Modifiers::none(),
+        target_frame_id: fid.0,
+    })
+    .expect("queue mouse press");
+    for i in 0..200_u32 {
+        tx.send(crate::keyboard::InputEvent::MouseMove {
+            x: 10.0 + i as f32,
+            y: 20.0 + i as f32,
+            modifiers: crate::keyboard::Modifiers::none(),
+            target_frame_id: fid.0,
+        })
+        .expect("queue mouse move");
+    }
+    tx.send(crate::keyboard::InputEvent::MouseRelease {
+        button: crate::keyboard::MouseButton::Left,
+        x: 209.0,
+        y: 219.0,
+        target_frame_id: fid.0,
+    })
+    .expect("queue mouse release");
+
+    let press = ev.read_char().expect("read press");
+    let press_slots = neovm_value::value::list_to_vec(&press).expect("press list");
+    assert_eq!(press_slots[0], Value::symbol("down-mouse-1"));
+
+    let mut moves = Vec::new();
+    let release = loop {
+        let event = ev.read_char().expect("read event");
+        let slots = neovm_value::value::list_to_vec(&event).expect("list event");
+        if slots[0] == Value::symbol("mouse-movement") {
+            let posn = neovm_value::value::list_to_vec(&slots[1]).expect("posn list");
+            let xy = posn[2];
+            moves.push((
+                xy.cons_car().as_fixnum().expect("x fixnum"),
+                xy.cons_cdr().as_fixnum().expect("y fixnum"),
+            ));
+        } else {
+            break slots[0];
+        }
+    };
+
+    assert_eq!(release, Value::symbol("drag-mouse-1"));
+    assert_eq!(
+        moves.len(),
+        1,
+        "200 queued motion events must coalesce to the latest position, got {} moves",
+        moves.len()
+    );
+    assert_eq!(
+        moves[0],
+        (209, 219),
+        "final motion endpoint before button release must never be dropped"
+    );
+}
+
+#[test]
+fn read_char_honors_mouse_fine_grained_tracking_nil_vs_t() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let fid = ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
+    {
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+    }
+    ev.obarray_mut().set_symbol_value("track-mouse", Value::T);
+    ev.obarray_mut()
+        .set_symbol_value("mouse-fine-grained-tracking", Value::NIL);
+    let tx = HostInputPublisher::install(&mut ev);
+
+    // Deliver moves inside the same 8x16 cell [8..16, 16..32), one at a time
+    // followed by a move into the next cell (24, 20) and a keypress sentinel.
+    let mut coarse_moves = Vec::new();
+    for &(x, y) in &[
+        (10.0_f32, 20.0_f32),
+        (11.0, 20.0),
+        (12.0, 22.0),
+        (14.0, 25.0),
+        (24.0, 20.0),
+    ] {
+        tx.send(crate::keyboard::InputEvent::MouseMove {
+            x,
+            y,
+            modifiers: crate::keyboard::Modifiers::none(),
+            target_frame_id: fid.0,
+        })
+        .expect("queue mouse move");
+        tx.send(crate::keyboard::InputEvent::key_press(
+            crate::keyboard::KeyEvent::char('k'),
+        ))
+        .expect("queue sentinel");
+        loop {
+            let event = ev.read_char().expect("read event");
+            if event == Value::fixnum('k' as i64) {
+                break;
+            }
+            let slots = neovm_value::value::list_to_vec(&event).expect("list event");
+            assert_eq!(slots[0], Value::symbol("mouse-movement"));
+            let posn = neovm_value::value::list_to_vec(&slots[1]).expect("posn list");
+            let xy = posn[2];
+            coarse_moves.push((
+                xy.cons_car().as_fixnum().expect("x"),
+                xy.cons_cdr().as_fixnum().expect("y"),
+            ));
+        }
+    }
+    assert_eq!(
+        coarse_moves,
+        vec![(10, 20), (24, 20)],
+        "with mouse-fine-grained-tracking nil, sub-cell moves must be suppressed"
+    );
+
+    // With mouse-fine-grained-tracking t, every 1-pixel move must be reported.
+    ev.obarray_mut()
+        .set_symbol_value("mouse-fine-grained-tracking", Value::T);
+    let mut fine_moves = Vec::new();
+    for &(x, y) in &[(25.0_f32, 20.0_f32), (26.0, 20.0), (27.0, 20.0)] {
+        tx.send(crate::keyboard::InputEvent::MouseMove {
+            x,
+            y,
+            modifiers: crate::keyboard::Modifiers::none(),
+            target_frame_id: fid.0,
+        })
+        .expect("queue mouse move");
+        tx.send(crate::keyboard::InputEvent::key_press(
+            crate::keyboard::KeyEvent::char('k'),
+        ))
+        .expect("queue sentinel");
+        loop {
+            let event = ev.read_char().expect("read event");
+            if event == Value::fixnum('k' as i64) {
+                break;
+            }
+            let slots = neovm_value::value::list_to_vec(&event).expect("list event");
+            assert_eq!(slots[0], Value::symbol("mouse-movement"));
+            let posn = neovm_value::value::list_to_vec(&slots[1]).expect("posn list");
+            let xy = posn[2];
+            fine_moves.push((
+                xy.cons_car().as_fixnum().expect("x"),
+                xy.cons_cdr().as_fixnum().expect("y"),
+            ));
+        }
+    }
+    assert_eq!(
+        fine_moves,
+        vec![(25, 20), (26, 20), (27, 20)],
+        "with mouse-fine-grained-tracking t, pixelwise moves must be delivered"
+    );
+}
+
+#[test]
 fn input_pending_p_ignores_internal_help_echo_events() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();

@@ -442,6 +442,36 @@ pub(crate) enum MouseEventPayload {
     WithClickCount { position: Value, count: u32 },
 }
 
+/// Frame-pixel bounding box of the last glyph reported by `mouse-movement`,
+/// stored on the frame it belongs to (GNU keeps it per display with
+/// `last_mouse_glyph_frame`; the frame stands in for that pointer, and it
+/// lives outside `Context` so the JIT-pinned `Context` layout is unchanged).
+///
+/// Matches GNU Emacs `dpyinfo->last_mouse_glyph` (`src/pgtkterm.c:5929-5944`,
+/// `src/xdisp.c:2789-2820`): while `mouse-fine-grained-tracking` and
+/// `window-resize-pixelwise` are nil, pointer motion remaining inside this box
+/// on the same frame updates `mouse-pixel-position` without
+/// generating redundant `(mouse-movement ...)` events.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastMouseMotionGlyph {
+    pub x: i64,
+    pub y: i64,
+    pub width: i64,
+    pub height: i64,
+}
+
+impl LastMouseMotionGlyph {
+    /// GNU forgets the glyph only on a button event, on leaving or unmapping
+    /// the frame, or on motion over another frame (xterm.c:14740-14773,
+    /// 20938, 21953), never on redisplay, so a redrawn frame keeps it.
+    pub fn contains(self, px: i64, py: i64) -> bool {
+        px >= self.x
+            && px < self.x.saturating_add(self.width.max(1))
+            && py >= self.y
+            && py < self.y.saturating_add(self.height.max(1))
+    }
+}
+
 impl KBoard {
     /// Copied key-echo state for the re-homed keyboard oracle; the KBoard
     /// field stays private (N1).

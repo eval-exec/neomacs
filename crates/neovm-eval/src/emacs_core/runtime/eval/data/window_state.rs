@@ -3590,6 +3590,10 @@ pub struct Frame {
     pub toolkit_tool_bar: ToolkitToolBar,
     /// Native input focus for a window-system frame. See [`FrameDisplayFocus`].
     pub display_focus: FrameDisplayFocus,
+    /// The glyph rectangle the last `mouse-movement` reported on this frame
+    /// (GNU `dpyinfo->last_mouse_glyph` while `last_mouse_glyph_frame` is
+    /// this frame). See [`crate::emacs_core::eval::data::command_loop::LastMouseMotionGlyph`].
+    pub last_mouse_glyph: Option<crate::emacs_core::eval::data::command_loop::LastMouseMotionGlyph>,
     /// GNU `f->n_tool_bar_items` survives `free_frame_tool_bar`
     /// (`gtkutil.c:6168-6206`). A later positive line count calls
     /// `update_frame_tool_bar` immediately (`xfns.c:1902-1908`), and that
@@ -7093,6 +7097,7 @@ impl Frame {
                 explicit_size_omitted: false,
             },
             display_focus: FrameDisplayFocus::Unfocused,
+            last_mouse_glyph: None,
             tool_bar_items_packed: false,
             compact_bar_height: 0,
             tab_bar_height: 0,
