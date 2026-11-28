@@ -76,6 +76,10 @@ pub(super) fn run(
     let period = Duration::from_nanos(1_000_000_000 / 120);
     let started = Instant::now();
     let mut sent_ns = Vec::with_capacity(inputs);
+    // How late each paced send left relative to its 120 Hz slot: the test
+    // process's own view of CPU contention during the measured window.
+    let mut send_lateness_ns = Vec::with_capacity(inputs);
+    let load_before = HostLoad::sample();
     let mut observations = vec![initial.clone()];
     let sample_state = |observations: &mut Vec<Value>| {
         if let Ok(bytes) = fs::read(state_path)
@@ -118,13 +122,23 @@ pub(super) fn run(
         {
             thread::sleep(remaining);
         }
-        sent_ns.push(started.elapsed().as_nanos() as u64);
+        // One clock read per send serves both the send log and the lateness
+        // against the send's 120 Hz slot (`period` = PERIOD_NS). Only paced
+        // sends have a slot to be late for; state-only runs inject back to
+        // back.
+        const PERIOD_NS: u64 = 1_000_000_000 / 120;
+        let sent_elapsed_ns = started.elapsed().as_nanos() as u64;
+        if mode == Mode::CalibratedPacing {
+            send_lateness_ns.push(sent_elapsed_ns.saturating_sub(PERIOD_NS * index as u64));
+        }
+        sent_ns.push(sent_elapsed_ns);
         trackpad.scroll(if index < inputs / 2 { PIXELS } else { -PIXELS });
         // Observe progress without waiting for a timer or a command. Sampling
         // files is outside the editor and does not force its redisplay.
         sample_state(&mut observations);
     }
     let injected_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let contention = Contention::measure(&send_lateness_ns, load_before, HostLoad::sample());
     let save = |observations: &[Value], drained_ms: Option<f64>| {
         fs::write(
             artifacts.join("continuous-input.json"),
@@ -134,6 +148,8 @@ pub(super) fn run(
                 "injected_ms": injected_ms,
                 "drained_ms": drained_ms,
                 "sent_ns": sent_ns,
+                "send_lateness_ns": send_lateness_ns,
+                "contention": contention,
                 "observations": observations,
             }))
             .unwrap(),
@@ -218,9 +234,134 @@ pub(super) fn run(
         );
     }
     if let Some(selected_budget) = &selected_budget {
+        let assessment = report.assess(selected_budget);
+        let missed = assessment != latency::Assessment::WithinBudget;
+        // The budget is unchanged. A miss on a contended host is not evidence
+        // about the editor, so it fails with a rerun diagnosis first instead
+        // of reading as a pacing regression. The budget assertion below stays
+        // the one Tier A1 latency site timing_assertion_ratchet pins for `run`.
         assert!(
-            report.assess(selected_budget) == latency::Assessment::WithinBudget,
-            "continuous scroll exceeded response budget: {report:?}; budget={selected_budget:?}; {environment:?}; {artifacts:?}"
+            !(missed && contention.contended()),
+            "host contended, rerun: {contention:?}; continuous scroll exceeded response budget: {report:?}; budget={selected_budget:?}; {environment:?}; {artifacts:?}"
         );
+        assert!(
+            assessment == latency::Assessment::WithinBudget,
+            "continuous scroll exceeded response budget on an uncontended host: {report:?}; budget={selected_budget:?}; {contention:?}; {environment:?}; {artifacts:?}"
+        );
+    }
+}
+
+/// One `/proc/loadavg` 1-minute sample against the online CPU count.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+struct HostLoad {
+    load_1m: Option<f64>,
+    cpus: usize,
+}
+
+impl HostLoad {
+    fn sample() -> Self {
+        let load_1m = fs::read_to_string("/proc/loadavg")
+            .ok()
+            .and_then(|text| text.split_whitespace().next()?.parse().ok());
+        let cpus = thread::available_parallelism().map_or(1, usize::from);
+        Self { load_1m, cpus }
+    }
+
+    /// More runnable work than CPUs. The measurement itself (editor, sway,
+    /// llvmpipe workers) keeps the 1-minute load near half the CPUs on a
+    /// quiet 4-CPU cohort host (1.62-2.40 over 10 cells, CI run 46141229354),
+    /// so half the CPUs would flag every run.
+    fn busy(self) -> bool {
+        self.load_1m.is_some_and(|load| load > self.cpus as f64)
+    }
+}
+
+/// Host contention over the measured window, from the test's own paced
+/// sends (p95 lateness against the 120 Hz slot) and the load average at
+/// both ends.
+#[derive(Debug, serde::Serialize)]
+struct Contention {
+    send_lateness_p95_us: Option<u64>,
+    send_lateness_max_us: Option<u64>,
+    before: HostLoad,
+    after: HostLoad,
+}
+
+impl Contention {
+    /// Half the 8.33 ms period: at the p95 the test process was descheduled
+    /// for half a slot while it paced input.  Timer wake-up jitter alone puts
+    /// the p95 at 1.57-2.74 ms on a quiet 4-CPU cohort host (10 cells, CI run
+    /// 46141229354), so a tighter bound would call every run contended.
+    const LATE_SEND_P95_US: u64 = 4_166;
+
+    fn measure(lateness_ns: &[u64], before: HostLoad, after: HostLoad) -> Self {
+        let mut sorted: Vec<u64> = lateness_ns.iter().map(|ns| ns / 1_000).collect();
+        sorted.sort_unstable();
+        // Nearest rank, the same index latency::Report uses for its p95.
+        let p95 = sorted
+            .get((sorted.len() * 95).div_ceil(100).saturating_sub(1))
+            .copied();
+        Self {
+            send_lateness_p95_us: p95,
+            send_lateness_max_us: sorted.last().copied(),
+            before,
+            after,
+        }
+    }
+
+    fn contended(&self) -> bool {
+        self.send_lateness_p95_us
+            .is_some_and(|p95| p95 > Self::LATE_SEND_P95_US)
+            || self.before.busy()
+            || self.after.busy()
+    }
+}
+
+#[cfg(test)]
+mod contention_tests {
+    use super::{Contention, HostLoad};
+
+    const QUIET: HostLoad = HostLoad {
+        load_1m: Some(0.5),
+        cpus: 12,
+    };
+
+    #[test]
+    fn punctual_sends_on_a_quiet_host_are_not_contention() {
+        let lateness = vec![200_000; 480];
+        assert!(!Contention::measure(&lateness, QUIET, QUIET).contended());
+        // The quiet cohort host's own timer jitter and measurement load
+        // (CI run 46141229354: p95 up to 2.74 ms, load up to 2.40 on 4 CPUs).
+        let cohort = HostLoad {
+            load_1m: Some(2.4),
+            cpus: 4,
+        };
+        let jitter = vec![2_742_000; 480];
+        assert!(!Contention::measure(&jitter, cohort, cohort).contended());
+    }
+
+    #[test]
+    fn late_sends_or_a_busy_host_mean_contention() {
+        // 25 of 480 sends (just over 5%) 5 ms late: the nearest-rank p95, the
+        // 456th value, is late and over the half-period bound.
+        let mut lateness = vec![100_000; 455];
+        lateness.extend(vec![5_000_000; 25]);
+        assert!(Contention::measure(&lateness, QUIET, QUIET).contended());
+
+        let busy = HostLoad {
+            load_1m: Some(13.0),
+            cpus: 12,
+        };
+        assert!(Contention::measure(&[0; 480], busy, QUIET).contended());
+        assert!(Contention::measure(&[0; 480], QUIET, busy).contended());
+    }
+
+    #[test]
+    fn an_unreadable_load_average_does_not_by_itself_mean_contention() {
+        let unknown = HostLoad {
+            load_1m: None,
+            cpus: 12,
+        };
+        assert!(!Contention::measure(&[0; 480], unknown, unknown).contended());
     }
 }

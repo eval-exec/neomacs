@@ -1031,5 +1031,191 @@ mod unix_impl {
             let _ = server.kill();
             let _ = server.wait();
         }
+
+        #[test]
+        fn zygote_refreshes_startup_buffers_cwd_and_emacsloadpath_per_child() {
+            // Regression test for the deeper pre-fork seam: the zygote parent
+            // pre-activates the image (`no_site_lisp=true`, no `EMACSLOADPATH`)
+            // and runs `bootstrap_buffers` once before `fork()`. Each forked
+            // child must still receive its own `default-directory` on all
+            // startup buffers (`*scratch*`, `*Messages*`, ` *Minibuf-0*`), its
+            // own `EMACSLOADPATH` prefix in `load-path`, and its own process
+            // environment.  The environment probe is a non-pinned variable:
+            // `USER` is a canonical pin, and `PinnedCommand` refuses a raw
+            // `env("USER", ..)` before the child ever runs.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-preact-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let parent_work = dir.path().join("parent-dir");
+            let cwd_a = dir.path().join("child-cwd-a");
+            let cwd_b = dir.path().join("child-cwd-b");
+            let extra_lisp = dir.path().join("extra-lisp");
+            for d in [&parent_work, &cwd_a, &cwd_b, &extra_lisp] {
+                fs::create_dir_all(d).unwrap();
+            }
+
+            let mut server = spawn_private_zygote(&program, &sock, &parent_work);
+
+            let inspect_form = r#"(princ (format "%S"
+                (list
+                  (mapcar (lambda (name)
+                            (with-current-buffer name
+                              (file-name-nondirectory
+                                (directory-file-name default-directory))))
+                          '("*scratch*" "*Messages*" " *Minibuf-0*"))
+                  (car load-path)
+                  (getenv "NEOVM_ZYGOTE_PROBE_TAG"))))"#;
+
+            let out_a = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_a,
+                dir.path(),
+                "child-a",
+                &[
+                    ("EMACSLOADPATH", &format!("{}:", extra_lisp.display())),
+                    ("NEOVM_ZYGOTE_PROBE_TAG", "alice"),
+                ],
+                inspect_form,
+            );
+            assert!(out_a.status.success(), "child-a failed: {out_a:?}");
+            let s_a = String::from_utf8_lossy(&out_a.stdout);
+            assert!(
+                s_a.starts_with(r#"(("child-cwd-a" "child-cwd-a" "child-cwd-a") "#),
+                "startup buffers did not update default-directory for child-a: {s_a}"
+            );
+            assert!(
+                s_a.contains(extra_lisp.to_str().unwrap()),
+                "EMACSLOADPATH was not applied to child-a load-path: {s_a}"
+            );
+            assert!(
+                s_a.ends_with(r#" "alice")"#),
+                "per-child env mismatch in child-a: {s_a}"
+            );
+
+            // Child B on the SAME zygote has no EMACSLOADPATH and a different cwd/tag.
+            let out_b = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_b,
+                dir.path(),
+                "child-b",
+                &[("NEOVM_ZYGOTE_PROBE_TAG", "bob")],
+                inspect_form,
+            );
+            assert!(out_b.status.success(), "child-b failed: {out_b:?}");
+            let s_b = String::from_utf8_lossy(&out_b.stdout);
+            assert!(
+                s_b.starts_with(r#"(("child-cwd-b" "child-cwd-b" "child-cwd-b") "#),
+                "startup buffers did not update default-directory for child-b: {s_b}"
+            );
+            assert!(
+                !s_b.contains(extra_lisp.to_str().unwrap()),
+                "child-a EMACSLOADPATH leaked into child-b: {s_b}"
+            );
+            assert!(
+                s_b.ends_with(r#" "bob")"#),
+                "per-child env mismatch in child-b: {s_b}"
+            );
+
+            let _ = server.kill();
+            let _ = server.wait();
+        }
+
+        #[test]
+        fn zygote_child_uses_its_own_runtime_root_for_load_path_and_directories() {
+            // The zygote parent sets the runtime-root-dependent variables
+            // (`load-path`, `data-directory`, `doc-directory`,
+            // `source-directory`, `installation-directory`) before `fork()`.
+            // A request that names a different valid `NEOMACS_RUNTIME_ROOT` must
+            // get that root's values, as a cold start of the same request does,
+            // not the parent's.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-root-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let parent_work = dir.path().join("parent-dir");
+            let cwd = dir.path().join("child-cwd");
+            for d in [&parent_work, &cwd] {
+                fs::create_dir_all(d).unwrap();
+            }
+            // A second valid runtime root: `lisp/` and `etc/` of the real one.
+            let real_root = crate::common::oracle_sandbox::project_root();
+            let other_root = dir.path().join("other-root");
+            fs::create_dir_all(&other_root).unwrap();
+            for sub in ["lisp", "etc"] {
+                std::os::unix::fs::symlink(real_root.join(sub), other_root.join(sub)).unwrap();
+            }
+            let other = other_root.to_str().unwrap();
+            let form = r#"(princ (format "%S"
+                (list data-directory doc-directory source-directory installation-directory
+                      (let ((hit nil))
+                        (dolist (d load-path) (when (string-prefix-p (getenv "NEOVM_ZYGOTE_PROBE_ROOT") d) (setq hit t)))
+                        hit))))"#;
+            let env = [
+                ("NEOMACS_RUNTIME_ROOT", other),
+                ("NEOVM_ZYGOTE_PROBE_ROOT", other),
+            ];
+
+            let mut server = spawn_private_zygote(&program, &sock, &parent_work);
+            let forked =
+                run_direct_on_socket(&sock, &program, &cwd, dir.path(), "root", &env, form);
+            let _ = server.kill();
+            let _ = server.wait();
+            assert!(forked.status.success(), "zygote child failed: {forked:?}");
+            let out = String::from_utf8_lossy(&forked.stdout);
+            let expected =
+                format!("(\"{other}/etc/\" \"{other}/etc/\" \"{other}/\" \"{other}/\" t)");
+            assert_eq!(out, expected, "child kept the zygote parent's runtime root");
+        }
+
+        #[test]
+        fn zygote_child_buffer_list_order_matches_cold_start() {
+            // The zygote parent runs `bootstrap_buffers` before `fork()`, so
+            // each child refreshes `default-directory` on startup buffers that
+            // already exist.  GNU's `init_buffer` does that without
+            // `record_buffer` (`src/buffer.c:4939,4984`), so the refresh must
+            // not reorder `buffer-list`: a forked child and a cold `--batch -Q`
+            // start of the same binary must agree.  GNU 31.1 prints
+            // ("*scratch*" " *Minibuf-0*" "*Messages*") for this form.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-order-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let parent_work = dir.path().join("parent-dir");
+            let cwd = dir.path().join("child-cwd");
+            for d in [&parent_work, &cwd] {
+                fs::create_dir_all(d).unwrap();
+            }
+            let form = r#"(princ (format "%S" (mapcar (function buffer-name) (buffer-list))))"#;
+
+            let mut cold = neomacs_test_env::CanonicalEnvironment::new(
+                neomacs_test_env::CanonicalProfile::Oracle,
+                dir.path(),
+                dir.path(),
+                dir.path(),
+            )
+            .expect("canonical env")
+            .command(&program);
+            cold.current_dir(&cwd);
+            cold.args(["--batch", "-Q", "--eval", form]);
+            let cold = cold.output().expect("cold neomacs run");
+            assert!(cold.status.success(), "cold run failed: {cold:?}");
+
+            let mut server = spawn_private_zygote(&program, &sock, &parent_work);
+            let forked =
+                run_direct_on_socket(&sock, &program, &cwd, dir.path(), "order", &[], form);
+            let _ = server.kill();
+            let _ = server.wait();
+            assert!(forked.status.success(), "zygote child failed: {forked:?}");
+
+            assert_eq!(
+                String::from_utf8_lossy(&forked.stdout),
+                String::from_utf8_lossy(&cold.stdout),
+                "zygote child buffer-list differs from a cold start"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&cold.stdout),
+                r#"("*scratch*" " *Minibuf-0*" "*Messages*")"#
+            );
+        }
     }
 }

@@ -5389,6 +5389,14 @@ impl Context {
         }
     }
 
+    /// True when the evaluator's OS process wait backend (`polling::Poller`)
+    /// has already been initialized. Pre-fork zygote parents assert this is
+    /// `false` right before `fork()` so forked children never share one poller.
+    #[doc(hidden)]
+    pub fn has_process_wait_backend(&self) -> bool {
+        self.processes.has_wait_backend()
+    }
+
     /// Reset transient evaluator state at a completed top-level boundary.
     ///
     /// GNU reaches interactive/runtime boundaries by unwinding dynamic state

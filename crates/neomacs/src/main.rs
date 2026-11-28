@@ -6100,25 +6100,14 @@ mod batch_zygote_arg_tests {
     }
 }
 
-/// Shared noninteractive `--batch` execution tail used by both normal batch
-/// invocations and forked zygote children. Does not create interactive TTY
-/// channels (`ThreadComms`) or spawn input reader threads.
-fn run_tty_batch_evaluator(
-    mut evaluator: Context,
-    mode: RuntimeMode,
-    startup: &StartupOptions,
-    process_started_at: Instant,
-    process_args: &[OsString],
-) -> i32 {
-    if !startup.noninteractive || startup.daemon.is_some() {
-        eprintln!("neomacs: batch evaluator only supports noninteractive --batch sessions");
-        return 1;
-    }
-
+/// Bootstrap the fixed noninteractive TTY (`80x24`) initial frame and startup
+/// buffers (`*scratch*`, ` *Minibuf-0*`, `*Messages*`). Env- and FD-independent,
+/// so the batch fork-zygote can run it ONCE in the parent before `fork()`.
+pub(crate) fn bootstrap_tty_batch_evaluator(evaluator: &mut Context) {
     let interactivity = Interactivity::from_noninteractive(true);
     let bootstrap_display = bootstrap_tty_display_config(interactivity);
     let frame_metrics = BootstrapFrameMetrics::TTY;
-    let (width, height) = startup_dimensions(startup.frontend, frame_metrics, true, false);
+    let (width, height) = startup_dimensions(FrontendKind::Tty, frame_metrics, true, false);
 
     evaluator.setup_thread_locals();
     reset_terminal_host();
@@ -6129,8 +6118,70 @@ fn run_tty_batch_evaluator(
     evaluator.set_variable("dump-mode", Value::NIL);
     tracing::info!("Context initialized");
 
-    // 3. Bootstrap the host-side initial frame/buffers.
-    let _bootstrap = bootstrap_buffers(&mut evaluator, width, height, bootstrap_display);
+    // Bootstrap the host-side initial frame/buffers.
+    let _bootstrap = bootstrap_buffers(evaluator, width, height, bootstrap_display);
+}
+
+/// Shared noninteractive `--batch` execution tail used by both normal batch
+/// invocations and forked zygote children. Does not create interactive TTY
+/// channels (`ThreadComms`) or spawn input reader threads.
+fn run_tty_batch_evaluator(
+    evaluator: Context,
+    mode: RuntimeMode,
+    startup: &StartupOptions,
+    process_started_at: Instant,
+    process_args: &[OsString],
+) -> i32 {
+    run_tty_batch_evaluator_inner(
+        evaluator,
+        mode,
+        startup,
+        process_started_at,
+        process_args,
+        false,
+    )
+}
+
+/// Entry point for forked zygote children whose evaluator already ran
+/// [`bootstrap_tty_batch_evaluator`] in the zygote parent before `fork()`.
+pub(crate) fn run_tty_batch_evaluator_bootstrapped(
+    evaluator: Context,
+    mode: RuntimeMode,
+    startup: &StartupOptions,
+    process_started_at: Instant,
+    process_args: &[OsString],
+) -> i32 {
+    run_tty_batch_evaluator_inner(
+        evaluator,
+        mode,
+        startup,
+        process_started_at,
+        process_args,
+        true,
+    )
+}
+
+fn run_tty_batch_evaluator_inner(
+    mut evaluator: Context,
+    mode: RuntimeMode,
+    startup: &StartupOptions,
+    process_started_at: Instant,
+    process_args: &[OsString],
+    already_bootstrapped: bool,
+) -> i32 {
+    if !startup.noninteractive || startup.daemon.is_some() {
+        eprintln!("neomacs: batch evaluator only supports noninteractive --batch sessions");
+        return 1;
+    }
+
+    if already_bootstrapped {
+        evaluator.setup_thread_locals();
+        reset_terminal_host();
+        reset_terminal_runtime();
+        evaluator.set_variable("dump-mode", Value::NIL);
+    } else {
+        bootstrap_tty_batch_evaluator(&mut evaluator);
+    }
     let frame_id = evaluator
         .frame_manager()
         .selected_frame()

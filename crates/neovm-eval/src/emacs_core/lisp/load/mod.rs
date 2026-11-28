@@ -5785,11 +5785,66 @@ pub(crate) fn clear_runtime_loader_state(eval: &mut super::eval::Context) {
     crate::emacs_core::eval::lifecycle::apply_lread_constants(eval);
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn finalize_cached_bootstrap_eval(
+/// The runtime-root-dependent variables: `load-path` and the four directory
+/// variables derived from `project_root`.  The pure half sets them so they are
+/// bound before DEFVAR adoption; every process sets them again in
+/// [`finish_cached_bootstrap_eval_env`] from its own root and environment, so
+/// a zygote child whose request names a different `NEOMACS_RUNTIME_ROOT`, a
+/// site-lisp choice or `EMACSLOADPATH` does not keep the parent's values.
+fn install_runtime_root_paths(
     eval: &mut super::eval::Context,
     project_root: &Path,
     role: RuntimeImageRole,
+    use_env_load_path: bool,
+) {
+    let lisp_dir = project_root.join("lisp");
+    // GNU guards the site-lisp prepend with `!will_dump_p ()`
+    // (`src/lread.c:5514`): an image that is still being constructed must
+    // not inherit whatever Lisp the host happens to have installed, or the
+    // dump would depend on it.  The image role is Neomacs' counterpart to
+    // that guard -- only a Final image is a real session.
+    let include_site_lisp = matches!(role, RuntimeImageRole::Final) && !no_site_lisp();
+    let load_path_entries = if use_env_load_path {
+        runtime_load_path_entries(project_root, &lisp_dir, include_site_lisp)
+    } else {
+        let site_lisp = if include_site_lisp {
+            site_lisp_load_path_entries(project_root)
+        } else {
+            Vec::new()
+        };
+        runtime_load_path_entries_from_os(&lisp_dir, None, &site_lisp)
+    };
+    eval.set_variable("load-path", Value::list(load_path_entries));
+
+    let etc_dir = project_root.join("etc");
+    eval.set_variable(
+        "data-directory",
+        Value::unibyte_string(lisp_directory_name_from_host_path(&etc_dir)),
+    );
+    eval.set_variable(
+        "doc-directory",
+        Value::unibyte_string(lisp_directory_name_from_host_path(&etc_dir)),
+    );
+    eval.set_variable(
+        "source-directory",
+        Value::unibyte_string(lisp_directory_name_from_host_path(project_root)),
+    );
+    eval.set_variable(
+        "installation-directory",
+        Value::unibyte_string(lisp_directory_name_from_host_path(project_root)),
+    );
+}
+
+/// Pure, OS-environment/cwd/FD-independent half of cached bootstrap
+/// activation. Safe to run ONCE in a pre-fork batch zygote parent before
+/// `fork()`; every per-process fact (host environment snapshot, identity,
+/// `default-directory`, `post_image_init`, and `ProcessWaitBackend`) is
+/// deferred to [`finish_cached_bootstrap_eval_env`].
+fn preactivate_cached_bootstrap_eval_pure(
+    eval: &mut super::eval::Context,
+    project_root: &Path,
+    role: RuntimeImageRole,
+    use_env_load_path: bool,
 ) -> Result<(), EvalError> {
     // Register all builtins — pdump doesn't preserve live Rust entry-point
     // pointers on heap subr objects, so the callable surface must be rebuilt.
@@ -5837,7 +5892,6 @@ pub(crate) fn finalize_cached_bootstrap_eval(
     );
     clear_runtime_loader_state(eval);
     clear_transient_runtime_features(eval);
-    crate::emacs_core::eval::lifecycle::install_host_environment_snapshot(eval);
     ensure_startup_compat_variables(eval, project_root);
     restore_cached_runtime_window_system_surface(eval);
     // GNU subr.el defines this as 0 in the dumped image.  Bootstrap/loading
@@ -5845,53 +5899,71 @@ pub(crate) fn finalize_cached_bootstrap_eval(
     // that transient construction state to runtime Lisp.
     eval.set_variable("gensym-counter", Value::fixnum(0));
 
-    let lisp_dir = project_root.join("lisp");
-    // GNU guards the site-lisp prepend with `!will_dump_p ()`
-    // (`src/lread.c:5514`): an image that is still being constructed must
-    // not inherit whatever Lisp the host happens to have installed, or the
-    // dump would depend on it.  The image role is Neomacs' counterpart to
-    // that guard -- only a Final image is a real session.
-    let include_site_lisp = matches!(role, RuntimeImageRole::Final) && !no_site_lisp();
-    eval.set_variable(
-        "load-path",
-        Value::list(runtime_load_path_entries(
-            project_root,
-            &lisp_dir,
-            include_site_lisp,
-        )),
-    );
+    install_runtime_root_paths(eval, project_root, role, use_env_load_path);
 
-    let etc_dir = project_root.join("etc");
-    eval.set_variable(
-        "data-directory",
-        Value::unibyte_string(lisp_directory_name_from_host_path(&etc_dir)),
-    );
-    eval.set_variable(
-        "doc-directory",
-        Value::unibyte_string(lisp_directory_name_from_host_path(&etc_dir)),
-    );
-    eval.set_variable(
-        "source-directory",
-        Value::unibyte_string(lisp_directory_name_from_host_path(project_root)),
-    );
-    eval.set_variable(
-        "installation-directory",
-        Value::unibyte_string(lisp_directory_name_from_host_path(project_root)),
-    );
+    restore_gnu_stale_preloaded_face_doc_refs(eval);
+    // Some GNU C-level variables, notably `data-directory`, become bound only
+    // after the initial `Context` bootstrap pass. Re-run the generated DEFVAR
+    // adoption at the runtime boundary so late-bound variables receive both
+    // their forwarding storage and their declared-special flag. The pass is
+    // idempotent for symbols restored intact from a pdump.
+    // SAFETY: late DEFVAR adoption is noncalling and may reattach the canonical
+    // debugger descriptor through installation hooks. The admitted manager is
+    // not replaced, and all raw loans end before subsequent Lisp admissions.
+    unsafe {
+        eval.obarray
+            .with_legacy_storage_write(super::defvar_object::adopt);
+    }
+    eval.clear_top_level_eval_state();
+
+    Ok(())
+}
+
+/// Per-process OS-environment, cwd, and wait-backend half of cached bootstrap
+/// activation. Runs in each forked zygote child after it applies its own
+/// environment, cwd, umask, locale, and `no_site_lisp` flag.
+fn finish_cached_bootstrap_eval_env(
+    eval: &mut super::eval::Context,
+    project_root: &Path,
+    role: RuntimeImageRole,
+) -> Result<(), EvalError> {
+    install_runtime_root_paths(eval, project_root, role, true);
+
+    crate::emacs_core::eval::lifecycle::install_host_environment_snapshot(eval);
+    super::runtime_identity::install(eval);
 
     // Mirror GNU `init_buffer` (`src/buffer.c:4923`): after loading
     // the dumped image, switch to `*scratch*` and reset its
     // `default-directory` to the runtime cwd captured at startup
-    // (GNU `emacs_wd` / our `std::env::current_dir()`). GNU only
-    // touches the scratch buffer and the (shared) minibuffer here —
-    // every other buffer inherits on creation. Mirror that by
-    // setting just the current buffer's slot via `set_variable`,
-    // which routes through the FORWARDED dispatch.
+    // (GNU `emacs_wd` / our `std::env::current_dir()`). When pre-fork
+    // bootstrap already created the startup buffers (`*scratch*`,
+    // ` *Minibuf-0*`, `*Messages*`), update each of them so none retains
+    // the zygote parent's working directory.
+    //
+    // GNU switches with `Fset_buffer` (`set_buffer_internal`) and writes the
+    // minibuffer's slot with `bset_directory` (`src/buffer.c:4939,4984`);
+    // neither calls `record_buffer`.  Switch unrecorded here too: the
+    // recording switch moves each buffer to the front of `buffer-list`, and a
+    // zygote child, whose startup buffers already exist, would then report
+    // `("*scratch*" "*Messages*" " *Minibuf-0*")` where GNU and a cold start
+    // report `("*scratch*" " *Minibuf-0*" "*Messages*")`.
     if let Ok(cwd) = std::env::current_dir() {
-        eval.set_variable(
-            "default-directory",
-            Value::unibyte_string(lisp_directory_name_from_host_path(&cwd)),
-        );
+        let cwd_val = Value::unibyte_string(lisp_directory_name_from_host_path(&cwd));
+        let original_buf = eval.buffer_manager().current_buffer_id();
+        for name in ["*scratch*", " *Minibuf-0*", "*Messages*"] {
+            if let Some(buf_id) = eval.buffer_manager().find_buffer_by_name(name) {
+                let _ = eval
+                    .buffer_manager_view_mut()
+                    .switch_current_unrecorded(buf_id);
+                eval.set_variable("default-directory", cwd_val);
+            }
+        }
+        if let Some(orig) = original_buf {
+            let _ = eval
+                .buffer_manager_view_mut()
+                .switch_current_unrecorded(orig);
+        }
+        eval.set_variable("default-directory", cwd_val);
     }
 
     // GNU's dumped image reaches `normal-top-level` with
@@ -5913,23 +5985,19 @@ pub(crate) fn finalize_cached_bootstrap_eval(
     // GNU citation behind every row.
     crate::emacs_core::eval::lifecycle::apply_post_image_init(eval);
     eval.processes.ensure_wait_backend();
-
-    restore_gnu_stale_preloaded_face_doc_refs(eval);
-    // Some GNU C-level variables, notably `data-directory`, become bound only
-    // after the initial `Context` bootstrap pass. Re-run the generated DEFVAR
-    // adoption at the runtime boundary so late-bound variables receive both
-    // their forwarding storage and their declared-special flag. The pass is
-    // idempotent for symbols restored intact from a pdump.
-    // SAFETY: late DEFVAR adoption is noncalling and may reattach the canonical
-    // debugger descriptor through installation hooks. The admitted manager is
-    // not replaced, and all raw loans end before subsequent Lisp admissions.
-    unsafe {
-        eval.obarray
-            .with_legacy_storage_write(super::defvar_object::adopt);
-    }
     eval.clear_top_level_eval_state();
 
     Ok(())
+}
+
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn finalize_cached_bootstrap_eval(
+    eval: &mut super::eval::Context,
+    project_root: &Path,
+    role: RuntimeImageRole,
+) -> Result<(), EvalError> {
+    preactivate_cached_bootstrap_eval_pure(eval, project_root, role, true)?;
+    finish_cached_bootstrap_eval_env(eval, project_root, role)
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -6939,17 +7007,46 @@ pub fn activate_runtime_evaluator(
     activate_runtime_evaluator_at_root(eval, &project_root, role)
 }
 
-fn activate_runtime_evaluator_at_root(
+/// Run the pure, OS-environment/cwd/FD-independent half of runtime evaluator
+/// activation ONCE in a pre-fork batch zygote parent before `fork()`.
+///
+/// Deliberately leaves `ProcessWaitBackend` unmaterialized and skips host
+/// environment/cwd/identity/post-image-init derivations; each forked child must
+/// complete activation by calling [`finish_forked_runtime_evaluator`] after
+/// applying its own environment, working directory, umask, locale, and
+/// `no_site_lisp` flag.
+pub fn preactivate_runtime_evaluator_for_fork(
     eval: &mut super::eval::Context,
-    project_root: &Path,
     role: RuntimeImageRole,
 ) -> Result<(), EvalError> {
+    let project_root = runtime_project_root();
     eval.loadup_dump_mode = None;
-    finalize_cached_bootstrap_eval(eval, project_root, role).map_err(|error| {
-        tracing::error!("runtime evaluator activation failed: {error:?}");
+    preactivate_cached_bootstrap_eval_pure(eval, &project_root, role, false).map_err(|error| {
+        tracing::error!("pre-fork runtime evaluator activation failed: {error:?}");
         error
     })?;
+    apply_runtime_image_role_surface(eval, role);
+    debug_assert!(
+        !eval.processes.has_wait_backend(),
+        "pre-fork activation must not materialize ProcessWaitBackend"
+    );
+    Ok(())
+}
 
+/// Complete the per-child OS-environment, cwd, identity, `post_image_init`,
+/// and `ProcessWaitBackend` activation after `fork()` in a batch zygote child.
+pub fn finish_forked_runtime_evaluator(
+    eval: &mut super::eval::Context,
+    role: RuntimeImageRole,
+) -> Result<(), EvalError> {
+    let project_root = runtime_project_root();
+    finish_cached_bootstrap_eval_env(eval, &project_root, role).map_err(|error| {
+        tracing::error!("post-fork runtime evaluator activation failed: {error:?}");
+        error
+    })
+}
+
+fn apply_runtime_image_role_surface(eval: &mut super::eval::Context, role: RuntimeImageRole) {
     match role {
         // GNU bootstrap-emacs keeps the preload construction surface: build
         // tooling still needs the larger interpreted evaluator allowance and
@@ -6965,7 +7062,19 @@ fn activate_runtime_evaluator_at_root(
             restore_final_image_interpreted_closure_filter(eval);
         }
     }
+}
 
+fn activate_runtime_evaluator_at_root(
+    eval: &mut super::eval::Context,
+    project_root: &Path,
+    role: RuntimeImageRole,
+) -> Result<(), EvalError> {
+    eval.loadup_dump_mode = None;
+    finalize_cached_bootstrap_eval(eval, project_root, role).map_err(|error| {
+        tracing::error!("runtime evaluator activation failed: {error:?}");
+        error
+    })?;
+    apply_runtime_image_role_surface(eval, role);
     Ok(())
 }
 

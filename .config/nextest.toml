@@ -85,45 +85,50 @@ setup = 'melpa-infra-preflight'
 # Compile-fail contract runners (feature `contract-fixtures`). Each runner
 # drives trybuild, which builds one scratch fixture project behind a single
 # project lock and compiles the neovm-core dependency tree into it on a cold
-# cache. Concurrent runners would only queue on that lock while their
-# watchdog clocks run, so they run one at a time; and a cold fixture build is
-# minutes, not the seconds of a unit test, so they get a fixture-build
-# watchdog. Kept first: for each setting the first matching override wins.
+# cache. They no longer reserve the whole pool: concurrent runners queue on
+# that project lock, and their watchdog clock runs while they wait. The 900s
+# watchdog (x2) covers a cold fixture build plus that queueing; if it trips
+# while queued, raise the watchdog, not the reservation. Kept first: for each
+# setting the first matching override wins.
 [[profile.default.overrides]]
 filter = 'test(/compile_contracts$/)'
-threads-required = "num-test-threads"
 slow-timeout = { period = "900s", terminate-after = 2, grace-period = "0s" }
 
 # Minimax oracle cases intentionally evaluate game trees in both Neomacs
 # and GNU Emacs.  The exhaustive tic-tac-toe forms can legitimately exceed
-# the package-wide 60s watchdog during a full parallel run, so run this
-# small test family without parallel CPU contention while keeping the
-# per-test watchdog tight enough to catch real hangs.
+# the package-wide 60s watchdog during a full parallel run, so keep a
+# widened 120s watchdog while running in parallel with the rest of the suite.
+# The macOS CI runner is slower on these forms: alone, under the old
+# reservation, minimax_tictactoe_with_moves took 83.5s (main run 46139643735).
+# Fully parallel, it and minimax_advanced_connect_game passed 120s, and
+# minimax_advanced_ttt_full_game took 107.9s (PR run 46144326637). macOS
+# therefore gets 360s, about 4x the uncontended cost, which still catches a
+# hang. The macOS block is listed first so it wins on that host.
 [[profile.default.overrides]]
 filter = 'package(neovm-oracle-tests) and test(minimax)'
-threads-required = "num-test-threads"
+platform = { host = 'cfg(target_os = "macos")' }
+slow-timeout = { period = "360s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(neovm-oracle-tests) and test(minimax)'
 slow-timeout = { period = "120s", terminate-after = 1 }
 
 # A few oracle families are legitimately heavy rather than hung: the
 # ucs-normalize cases load the full Unicode normalization tables in BOTH
 # Neomacs and GNU, and the exhaustive proptest comparisons run many forms per
-# test. Individually they finish well within 120s; the tight 60s package
-# watchdog only trips them through CPU contention in a fully parallel run. Give
-# them the same 120s ceiling as minimax (matched first, so it wins over the
-# general oracle override below). If one still exceeds 120s, that is a real
-# performance regression to investigate, not a watchdog to widen further.
+# test. Give them the same 120s ceiling as minimax (matched first, so it wins
+# over the general oracle override below) while running in parallel. If one
+# still exceeds 120s, that is a real performance regression to investigate, not
+# a watchdog to widen further.
 [[profile.default.overrides]]
 filter = 'package(neovm-oracle-tests) and (test(ucs_normalize) or test(oracle_prop_compare_mixed_int_float) or test(oracle_prop_consp_atom_listp))'
-threads-required = "num-test-threads"
 slow-timeout = { period = "120s", terminate-after = 1 }
 
 # The full regex sweep evaluates roughly 54k generated cases in 180 release
-# Neomacs subprocesses. It is now part of the default suite, so isolate it from
-# CPU contention and give it enough time to finish while retaining a bounded
-# watchdog.
+# Neomacs subprocesses. Keep the widened 120s watchdog while letting it run
+# in parallel with other oracle tests.
 [[profile.default.overrides]]
 filter = 'package(neovm-oracle-tests) and test(regex_parity_proptest_full)'
-threads-required = "num-test-threads"
 slow-timeout = { period = "120s", terminate-after = 1 }
 
 # The two expanded-cache replay tests each run TWO full partial bootstraps (the
@@ -145,8 +150,8 @@ slow-timeout = { period = "120s", terminate-after = 1 }
 # (0.034s -> 0.917s). Fixing that in the loader is an engine change, tracked
 # separately -- it would speed up every bootstrap-heavy test, not just these two.
 #
-# Widen the watchdog for these two rather than reserving the whole machine with
-# threads-required: the contention comes from processes outside nextest's
+# Widen the watchdog for these two rather than reserving pool slots for them:
+# the contention comes from processes outside nextest's
 # control, and serializing two ~140s tests would add minutes of otherwise-idle
 # time to every full run. 1200s keeps a bounded watchdog with room over the
 # worst observed 220s. If one exceeds 1200s, that is a real regression.
@@ -158,37 +163,15 @@ slow-timeout = { period = "1200s", terminate-after = 1 }
 # Neomacs once per ~39 env row, so one test is ~40 subprocess runs.  Six of
 # those rows set NEOVM_GC_STRESS=1, and stress mode collects at EVERY
 # allocation-bearing safe point, so those rows cost the number of Lisp safe
-# points the form executes (~0.7 ms per collection).  The cost is therefore a
-# property of the TREE, not of the test: on a correctly fresh-built tree
-# (byte-compiled Lisp -- the fresh-build attestation refuses anything else)
-# the 15 tests measured 28.8-48.2s each on treeroot, 15/15 in 100.2s at six
-# concurrent; on a source-only tree the same tests take 850s+ because loading
-# bytecomp.el executes ~279k extra safe points.  240s is 5x the measured
-# fresh-built worst, with room for contention and slower hosts; the old 120s
-# ceiling predates the GC-stress rows and was sized against a tree state the
-# attestation now refuses.  `threads-required` isolates these tests in the
-# default profile; scripts/oracle-full-run.sh runs the same 15 as a bounded
-# slow group under `oracle-slow` instead of serializing them.  The filter
-# covers every test that calls inlined_call_semantics::check: the module
-# itself, backtrace_frame_semantics' oracle_inline_o1/o2, and
-# debug_on_next_call's oracle_inline_o3/o4.
+# points the form executes (~0.7 ms per collection).  240s leaves ample room
+# for full parallel execution alongside the rest of the oracle suite without
+# serializing the entire 24-thread pool for ~4 minutes.  The filter covers
+# every test that calls inlined_call_semantics::check: the module itself,
+# backtrace_frame_semantics' oracle_inline_o1/o2, and debug_on_next_call's
+# oracle_inline_o3/o4.
 [[profile.default.overrides]]
 filter = 'package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
-threads-required = "num-test-threads"
 slow-timeout = { period = "240s", terminate-after = 1 }
-
-# A handful of subprocess probes are timing sensitive rather than divergent:
-# `process_attributes_running_child` reads `process-running-child-p' while a
-# 0.2s child is alive, and the process-filter/coding probes below read output a
-# child writes immediately after start (`accept-process-output` returns as soon
-# as any bytes arrive, so a starved run can observe a partial or empty buffer).
-# A fully parallel run can steal enough scheduling latency to miss the window.
-# Run them isolated (adequate latency), like the heavy families, rather than
-# reshaping the probes (a longer-lived child would hold the process pipe open
-# and block the eval).
-[[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace) or test(div_cx33_process_kill_query_off_then_kill_buffer) or test(div_core_divergence_surface_process_attributes_running_child_combo) or test(divergence_process_output_to_buffer))'
-threads-required = "num-test-threads"
 
 # The generative window-tree property replays whole operation SEQUENCES in both
 # engines, so one "test" is hundreds of paired subprocess runs — the 60s
@@ -227,81 +210,11 @@ slow-timeout = { period = "960s", terminate-after = 1 }
 filter = 'package(neovm-core) and test(native_runtime_test)'
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 
-# These tests own the live desktop through one helper. Do not interleave them
-# with other tests in this nextest invocation (including other GUI tests in the
-# merged gui binary).
-[[profile.default.overrides]]
-filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
-platform = { host = 'cfg(target_os = "macos")' }
-threads-required = "num-test-threads"
-
-# Calibrated 120 Hz scroll pacing gates measure software-Vulkan (llvmpipe)
-# input-to-presentation latency and glmark2 capacity on a live compositor.
-# Reserve the whole nextest pool so sibling tests cannot contend for CPU cores
-# during the pacing measurement.  All other Linux GUI rows (stalled scroll,
-# page-key receipts, resize presentation, Wayland font raster, sustained-stream
-# state checks) own private Xvfb/Sway compositors and assert state transitions
-# with generous hang-avoidance caps, so they run safely in parallel.
-[[profile.default.overrides]]
-filter = 'package(neomacs-gui-tests) and test(~continuous_120hz_)'
-threads-required = "num-test-threads"
-
 # A signature-exact GNU ime miss is non-fatal, so its ::warning:: line has to
 # reach the step log on success. GitHub Actions only annotates lines it sees.
 [[profile.default.overrides]]
 filter = 'test(fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key)'
 success-output = "immediate-final"
-
-# The Helm Pydoc workflow drives a real Helm session in BOTH editors; the first
-# `M-x helm-pydoc` synchronously collects the module list through a Python
-# subprocess in each editor, and the stage's own readiness bound is 12 s.  In a
-# fully parallel TUI run (24 pairs on the shard's cores) one editor can still
-# be inside helm-pydoc's collection when that bound expires: the captured
-# screen shows the command name in the echo area and no Helm window yet, which
-# is contention, not a divergence (it passes alone and in 1188/1188 suite
-# runs).  Run this one case without parallel CPU contention, the same way the
-# heavy oracle families above are isolated, instead of widening the in-test
-# bound.
-#
-# This block MUST stay ABOVE the package-wide `test(~package_tui::)`
-# override below: nextest applies only the FIRST matching override, so a
-# later block is shadowed by that 4-thread rule (measured: after the broad
-# block the helm pair ran concurrently with another test, 30.0 s total,
-# against 51.5 s when it holds the whole pool).
-[[profile.default.overrides]]
-filter = 'test(~package_tui::helm_pydoc_test::helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem)'
-threads-required = "num-test-threads"
-
-# The interactive package-TUI suites pair a GNU Emacs and a Neomacs in PTYs and
-# drive them by screen state, so every pair needs CPU to keep its own deadlines.
-# At the default budget a family run starts all thirteen pairs at once, and pairs
-# then miss those deadlines while waiting their turn: over three uncapped family
-# runs, leuven's readiness marker and helm-gitignore's HTTP-failure screen each
-# timed out once, while both pass alone, repeatedly.  Reserve four threads per
-# test so a few pairs run at a time.  The suites are I/O-bound, so this costs no
-# wall clock -- capped family runs took 59.6s and 61.4s against 60.7s and 64.0s
-# uncapped, both 13/13.
-[[profile.default.overrides]]
-filter = 'test(~package_tui::)'
-threads-required = 4
-
-# Every daemon-lifecycle case is wall-clock sensitive: a readiness deadline,
-# a startup-lock wait, or a reply budget measured against real daemon and
-# client processes on the live socket/pty surface.  Run at the default budget
-# the whole suite missed those deadlines at once -- 29 of 33 cases failed at a
-# uniform 60s, all passing serially and in isolation on the same machine.  Run
-# it one case at a time.  This costs one bootstrap, not one per case: the
-# fixture provisions the shared runtime image itself (neomacs-infra), and
-# every later case reuses it.
-# The daemon lifecycle binary is the only neomacs-package test binary whose
-# tests sit at the crate root; the merged integration binary and the lib put
-# every test behind a module, so their names contain "::". Select the
-# root-level cases without naming the binary, which is absent from the
-# workspace test archive (that package's test harnesses are not consumed
-# there) and would make a binary_id filter fail in shard invocations.
-[[profile.default.overrides]]
-filter = 'package(neomacs) and not test(~::)'
-threads-required = "num-test-threads"
 
 # Executable lookup failures use a minimal evaluator and local fixtures. No
 # child should start; catch a blocked host lookup promptly, with the case name
@@ -311,11 +224,10 @@ filter = 'package(neovm-core) and test(=emacs_core::process::tests::call_process
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 
 # The whole-host oracle recipe (scripts/oracle-full-run.sh) runs the 15
-# GC-stress matrix tests as a separate slow group.  Same evidence-based 240s
-# watchdog as the default-profile override, but with a bounded 2-slot
-# reservation (up to 12 concurrent tests on the 24-thread pool) instead of the
-# whole pool, so the measured 100.2s group stays well inside one batch.  Only
-# the recipe selects this profile; a plain `cargo nextest run` keeps the
+# GC-stress matrix tests as a separate slow group, with the same
+# evidence-based 240s watchdog as the default-profile override.  No test
+# reserves pool slots; the group runs at the profile's full parallelism.
+# Only the recipe selects this profile; a plain `cargo nextest run` keeps the
 # default-profile behavior.
 [profile.oracle-slow]
 test-threads = 24
@@ -323,5 +235,4 @@ slow-timeout = { period = "240s", terminate-after = 1, grace-period = "0s" }
 
 [[profile.oracle-slow.overrides]]
 filter = 'package(neovm-oracle-tests) and (test(inlined_call_semantics::) or test(backtrace_frame_semantics::oracle_inline_) or test(debug_on_next_call::oracle_inline_))'
-threads-required = 2
 slow-timeout = { period = "240s", terminate-after = 1 }

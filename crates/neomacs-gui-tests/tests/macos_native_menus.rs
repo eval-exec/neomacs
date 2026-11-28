@@ -18,12 +18,15 @@ impl Drop for Editor {
         let _ = self.0.wait();
     }
 }
+/// One test owns the desktop for both contracts. A macOS login session has
+/// one menu bar, one pointer and one key focus, and the driver targets the
+/// window titled "NEOMACS-MENU-REPRO", so two editors driven at once collide
+/// whatever the scheduler does. Running the contracts in sequence inside one
+/// test keeps the family correct under a fully parallel nextest pool without
+/// reserving pool slots.
 #[test]
-fn shared_desktop_menu_contract() {
+fn shared_desktop_menu_and_bottom_edge_contracts() {
     run("menu-driver.el", false);
-}
-#[test]
-fn shared_bottom_edge_contract() {
     run("menu-driver-tall.el", true);
 }
 fn run(fixture: &str, edges: bool) {

@@ -301,17 +301,55 @@ fn looks_like_form(content: &str) -> bool {
     s.starts_with('(') || s.starts_with(';')
 }
 
-fn line_of(src: &[u8], offset: usize) -> usize {
-    1 + src[..offset.min(src.len())]
-        .iter()
-        .filter(|&&b| b == b'\n')
-        .count()
+/// One file lexed once: the code mask and literal table serve both the
+/// module walk and the form extraction.
+struct Scan<'a> {
+    src: &'a str,
+    code: Vec<bool>,
+    literals: Vec<Literal>,
+}
+
+impl<'a> Scan<'a> {
+    fn new(src: &'a str) -> Self {
+        let (code, literals) = Lexer::new(src).run();
+        Self {
+            src,
+            code,
+            literals,
+        }
+    }
+}
+
+/// 1-based line numbers by binary search over the newline offsets, built once
+/// per file.  Counting newlines from byte 0 for every candidate made the sweep
+/// quadratic in large test sources (one is 1.8 MB with thousands of forms).
+struct LineIndex(Vec<usize>);
+
+impl LineIndex {
+    fn new(src: &[u8]) -> Self {
+        Self(
+            src.iter()
+                .enumerate()
+                .filter_map(|(i, &b)| (b == b'\n').then_some(i))
+                .collect(),
+        )
+    }
+
+    fn line_of(&self, offset: usize) -> usize {
+        1 + self.0.partition_point(|&newline| newline < offset)
+    }
 }
 
 /// Collect the string literals that are used as oracle form sources.
 fn form_candidates(src: &str) -> Vec<(usize, String)> {
+    form_candidates_in(&Scan::new(src))
+}
+
+fn form_candidates_in(scan: &Scan<'_>) -> Vec<(usize, String)> {
+    let src = scan.src;
     let bytes = src.as_bytes();
-    let (code, literals) = Lexer::new(src).run();
+    let code = &scan.code;
+    let literals = &scan.literals;
 
     // Literal start offsets, for direct-argument detection.
     let mut literal_at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
@@ -355,15 +393,11 @@ fn form_candidates(src: &str) -> Vec<(usize, String)> {
     // Literals bound as `let <name> = <literal>` where <name> is consumed as
     // the form argument of an assert_oracle_* call.
     let mut candidates = Vec::new();
+    let mut lines: Option<LineIndex> = None;
     for (idx, lit) in literals.iter().enumerate() {
-        let content = if lit.hashes == 0 {
-            decode_plain(&src[lit.content_start..lit.content_end])
-        } else {
-            src[lit.content_start..lit.content_end].to_string()
-        };
-        if !looks_like_form(&content) {
-            continue;
-        }
+        // Decide candidacy from the surrounding code first; decoding every
+        // literal in the file only to discard non-candidates was most of the
+        // per-literal work.
         let is_candidate = if direct.contains(&idx) {
             true
         } else {
@@ -395,9 +429,21 @@ fn form_candidates(src: &str) -> Vec<(usize, String)> {
                 false
             }
         };
-        if is_candidate {
-            candidates.push((line_of(bytes, lit.start), content));
+        if !is_candidate {
+            continue;
         }
+        let content = if lit.hashes == 0 {
+            decode_plain(&src[lit.content_start..lit.content_end])
+        } else {
+            src[lit.content_start..lit.content_end].to_string()
+        };
+        if !looks_like_form(&content) {
+            continue;
+        }
+        let line = lines
+            .get_or_insert_with(|| LineIndex::new(bytes))
+            .line_of(lit.start);
+        candidates.push((line, content));
     }
     candidates
 }
@@ -423,9 +469,10 @@ fn resolve_module(containing: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// Every `mod NAME;` and `#[path = "..."] mod NAME;` child of one file.
-fn child_modules(path: &Path, src: &str) -> Vec<PathBuf> {
+fn child_modules(path: &Path, scan: &Scan<'_>) -> Vec<PathBuf> {
+    let src = scan.src;
     let bytes = src.as_bytes();
-    let (code, _) = Lexer::new(src).run();
+    let code = &scan.code;
     let mut out = Vec::new();
     // #[path = "..."] mod name;
     let path_needle = b"#[path";
@@ -472,7 +519,14 @@ fn child_modules(path: &Path, src: &str) -> Vec<PathBuf> {
     out
 }
 
-fn collect_reachable(root: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>) {
+/// One reachable source file and the form candidates found in it.
+struct SweptFile {
+    path: PathBuf,
+    candidates: Vec<(usize, String)>,
+}
+
+/// Walk the module graph from `root`, reading and lexing each file once.
+fn collect_reachable(root: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<SweptFile>) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(path) = stack.pop() {
         let path = path.canonicalize().unwrap_or(path);
@@ -482,8 +536,10 @@ fn collect_reachable(root: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<Pat
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
-        out.push(path.clone());
-        stack.extend(child_modules(&path, &src));
+        let scan = Scan::new(&src);
+        stack.extend(child_modules(&path, &scan));
+        let candidates = form_candidates_in(&scan);
+        out.push(SweptFile { path, candidates });
     }
 }
 
@@ -511,11 +567,8 @@ fn every_compiled_oracle_form_source_is_complete() {
 
     let mut checked = 0usize;
     let mut failures = Vec::new();
-    for path in &files {
-        let Ok(src) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        for (line, content) in form_candidates(&src) {
+    for SweptFile { path, candidates } in &files {
+        for (line, content) in candidates {
             checked += 1;
             if let Err(err) = validate_form_source(&content) {
                 let rel = path.strip_prefix(manifest).unwrap_or(path);
@@ -556,6 +609,8 @@ fn bad() {
 "##;
     let found = form_candidates(bad);
     assert_eq!(found.len(), 1, "expected one form candidate, got {found:?}");
+    // Line 1 is the empty line after the opening delimiter.
+    assert_eq!(found[0].0, 4, "line of the planted form: {found:?}");
     assert!(
         validate_form_source(&found[0].1).is_err(),
         "the planted malformed form must be rejected"
@@ -575,12 +630,54 @@ fn good() {
         2,
         "expected two form candidates, got {found:?}"
     );
+    assert_eq!(
+        found.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+        [4, 6],
+        "lines of the bound and the direct form: {found:?}"
+    );
     for (_, content) in &found {
         assert!(
             validate_form_source(content).is_ok(),
             "complete form rejected: {content:?}"
         );
     }
+}
+
+/// The newline index is what made the sweep linear, so its answers must
+/// match counting newlines before the offset, on every line-ending shape.
+#[test]
+fn line_index_matches_a_newline_count_before_the_offset() {
+    fn naive(src: &[u8], offset: usize) -> usize {
+        1 + src[..offset].iter().filter(|&&b| b == b'\n').count()
+    }
+    for src in [
+        "",
+        "no trailing newline",
+        "one\ntwo\nthree",
+        "trailing\n",
+        "\n\nleading blank lines",
+        "crlf\r\nline\r\nendings\r\n",
+        "multi\u{e9}byte \u{1f600}\nline \u{4e2d}\u{6587}\nend",
+    ] {
+        let bytes = src.as_bytes();
+        let index = LineIndex::new(bytes);
+        for offset in 0..=bytes.len() {
+            assert_eq!(
+                index.line_of(offset),
+                naive(bytes, offset),
+                "offset {offset} in {src:?}"
+            );
+        }
+    }
+    // A form after CRLF lines and a multibyte line keeps its line number.
+    let crlf = "#[test]\r\nfn f() {\r\n    // \u{e9}\u{1f600}\r\n    assert_oracle_parity_expect(r#\"(list 1)\"#, expect);\r\n}\r\n";
+    assert_eq!(
+        form_candidates(crlf)
+            .iter()
+            .map(|(line, _)| *line)
+            .collect::<Vec<_>>(),
+        [4]
+    );
 }
 
 /// The reader guard runs at `OracleSandbox::new`, before any `OracleMode`

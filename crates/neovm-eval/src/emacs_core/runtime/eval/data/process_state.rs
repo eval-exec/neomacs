@@ -3711,6 +3711,13 @@ impl ProcessManager {
         }
     }
 
+    /// True when the OS wait backend (`polling::Poller` + signal wake pipe) has
+    /// been materialized. A pre-fork zygote parent must keep this `false` so
+    /// forked children never share one epoll/kqueue FD.
+    pub(crate) fn has_wait_backend(&self) -> bool {
+        self.wait_backend.poller.is_some()
+    }
+
     /// Materialize the OS wait backend if it was deferred before a zygote `fork()`.
     pub(crate) fn ensure_wait_backend(&mut self) {
         if self.wait_backend.poller.is_none() {
