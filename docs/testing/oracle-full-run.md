@@ -150,14 +150,13 @@ cost by eliminating the every-8th major.)
 
 The default profile gives the 15 tests a **240 s** watchdog (5x the
 measured fresh-built worst 48.2 s, with room for contention and slower hosts)
-and isolates them with `threads-required = "num-test-threads"`. The recipe
-splits them out:
+and runs them in parallel with the rest of the suite; no test reserves the
+whole pool. The recipe splits them out:
 
 1. **Phase 1** — everything else, default profile.
 2. **Phase 2** — the 15 tests under the `oracle-slow` profile: same 240 s
-   watchdog, but a bounded 2-slot reservation (up to 12 concurrent on the
-   24-thread pool), which finishes the measured group in about a minute on a
-   12-core host.
+   watchdog, at the profile's full parallelism (no test reserves pool
+   slots).
 
 `ORACLE_FULL_PHASE=1` or `=2` runs a single phase, which keeps a remote job
 inside its host slot's time cap; phase 2 reuses the test binaries phase 1

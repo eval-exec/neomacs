@@ -646,13 +646,23 @@ printf 'args=%s\nemacs=%s\nhome=%s\n' "$*" "$EMACS" "$HOME" > "$DOOM_TEST_REPORT
 }
 
 #[test]
-fn nextest_serializes_melpa_package_processes() {
+fn nextest_never_reserves_the_whole_test_pool() {
     let nextest = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
         "/.config/nextest.toml"
     ));
     assert!(nextest.contains("filter = 'package(neomacs-melpa-tests)'"));
-    assert!(nextest.contains("threads-required = \"num-test-threads\""));
+    // Every test runs in parallel: a family that is sensitive to contention
+    // must have its test fixed, not reserve pool slots (whole or numeric).
+    let reserving: Vec<&str> = nextest
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter(|line| line.contains("threads-required") || line.contains("num-test-threads"))
+        .collect();
+    assert!(
+        reserving.is_empty(),
+        "pool-slot reservations: {reserving:?}"
+    );
 }
 
 #[test]

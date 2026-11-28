@@ -31,8 +31,8 @@
 # Phases:
 #   1. Every oracle test except the 15 GC-stress matrix tests, default profile.
 #   2. Those 15 tests under the `oracle-slow` nextest profile: same 2400s
-#      watchdog as the default-profile override, but a bounded 2-slot
-#      reservation (12 concurrent) instead of serializing the whole group.
+#      watchdog as the default-profile override, at the profile's full
+#      parallelism (no test reserves pool slots).
 #      Measured: one such test takes 857s with the release binary in VERIFY
 #      mode, so the group is ~3.6 CPU-hours; phase 2 runs it in tens of minutes.
 #
