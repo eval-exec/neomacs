@@ -178,17 +178,6 @@ slow-timeout = { period = "1800s", terminate-after = 1 }
 filter = 'package(neovm-oracle-tests) and (test(~treesit_grammar_loading::) or test(=oracle_treesit_real_node::real_json_node_keeps_type_and_parser_through_gc_and_deletion))'
 slow-timeout = { period = "960s", terminate-after = 1 }
 
-# The form-source sweep is not a GNU/Neomacs form: it is one single-threaded,
-# CPU-bound scan of 3000+ test sources and 30000+ embedded forms in the debug
-# test binary. It takes 23.5-24.7s of wall time on an idle 12-CPU host. In a
-# fully parallel suite the host is oversubscribed (load average 16-21), so its
-# CPU share drops, and it hit the 60s single-form budget below in 2 of 3 such
-# runs. 240s is about 10x its uncontended cost, and still catches a real hang.
-# Listed before the package-wide rule so it wins.
-[[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and test(=form_source_sweep::every_compiled_oracle_form_source_is_complete)'
-slow-timeout = { period = "240s", terminate-after = 1 }
-
 # Oracle tests compare neomacs against GNU Emacs — single-form hangs
 # should be caught quickly instead of wasting 10 minutes.
 [[profile.default.overrides]]
