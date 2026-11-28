@@ -17,6 +17,7 @@
 
 (defvar drag-test-ready (getenv "NEOMACS_DRAG_TEST_READY"))
 (defvar drag-test-pressed (getenv "NEOMACS_DRAG_TEST_PRESSED"))
+(defvar drag-test-pointer (getenv "NEOMACS_DRAG_TEST_POINTER"))
 (defvar drag-test-out (getenv "NEOMACS_DRAG_TEST_OUT"))
 (defvar drag-test-move-count 0)
 (defvar drag-test-redisplay-count 0)
@@ -64,6 +65,21 @@ The test sweeps 300 steps from the start to the end point.  GNU reports a
                    (expected_end . ,expected-end)
                    (region_active . ,region-active)))))
       (rename-file tmp drag-test-out t))))
+
+(defun drag-test-await-pointer ()
+  "Report once this frame has received the pointer at the drag start.
+The compositor delivers a button to the surface under the pointer, so a
+press sent before the frame has the pointer reaches no client.  This
+waits on the editor's own record of the pointer, not on a delay."
+  (let ((pos (mouse-pixel-position)))
+    (if (and (eq (car pos) (selected-frame))
+             (eql (cadr pos) drag-test-start-x)
+             (eql (cddr pos) drag-test-start-y))
+        (let ((tmp (concat drag-test-pointer ".tmp")))
+          (with-temp-file tmp
+            (insert (json-encode `((x . ,(cadr pos)) (y . ,(cddr pos))))))
+          (rename-file tmp drag-test-pointer t))
+      (run-at-time 0.02 nil #'drag-test-await-pointer))))
 
 (defun drag-test-setup ()
   (let ((buf (get-buffer-create "*wayland-drag-test*")))
@@ -122,7 +138,9 @@ The test sweeps 300 steps from the start to the end point.  GNU reports a
           (insert (json-encode `((pid . ,(emacs-pid))
                                  (width . ,(frame-pixel-width))
                                  (height . ,(frame-pixel-height))))))
-        (rename-file tmp drag-test-ready t)))))
+        (rename-file tmp drag-test-ready t)))
+    (when drag-test-pointer
+      (drag-test-await-pointer))))
 
 (run-at-time 0.2 nil #'drag-test-setup)
 (run-at-time 30 nil (lambda () (drag-test-write-result) (kill-emacs 1)))

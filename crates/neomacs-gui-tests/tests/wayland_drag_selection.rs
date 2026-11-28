@@ -155,6 +155,7 @@ fn wayland_drag_selection_coalesces_motion_burst_and_preserves_final_endpoint() 
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/wayland-drag-selection.el");
     let ready_path = artifacts.join("ready.json");
     let pressed_path = artifacts.join("pressed.json");
+    let pointer_path = artifacts.join("pointer.json");
     let out_path = artifacts.join("result.json");
 
     let mut cmd = Command::new(&binary);
@@ -167,6 +168,7 @@ fn wayland_drag_selection_coalesces_motion_burst_and_preserves_final_endpoint() 
         .env("WGPU_BACKEND", "vulkan")
         .env("NEOMACS_DRAG_TEST_READY", &ready_path)
         .env("NEOMACS_DRAG_TEST_PRESSED", &pressed_path)
+        .env("NEOMACS_DRAG_TEST_POINTER", &pointer_path)
         .env("NEOMACS_DRAG_TEST_OUT", &out_path);
     for (k, v) in session.env() {
         cmd.env(k, v);
@@ -182,6 +184,11 @@ fn wayland_drag_selection_coalesces_motion_burst_and_preserves_final_endpoint() 
         120,
         40,
     );
+    // The sway tree shows the configured geometry before the client has
+    // committed a buffer there, and a button sent before the compositor
+    // gives the surface pointer focus reaches no client.  Wait until the
+    // editor itself has received the pointer at the drag start.
+    let _pointer = wait_for_json(&pointer_path, Duration::from_secs(10));
 
     // Move into the mapped window and press left button; wait causally for
     // `mouse-drag-region` to enter before injecting the 300-step motion burst.
