@@ -98,6 +98,17 @@ slow-timeout = { period = "900s", terminate-after = 2, grace-period = "0s" }
 # and GNU Emacs.  The exhaustive tic-tac-toe forms can legitimately exceed
 # the package-wide 60s watchdog during a full parallel run, so keep a
 # widened 120s watchdog while running in parallel with the rest of the suite.
+# The macOS CI runner is slower on these forms: alone, under the old
+# reservation, minimax_tictactoe_with_moves took 83.5s (main run 46139643735).
+# Fully parallel, it and minimax_advanced_connect_game passed 120s, and
+# minimax_advanced_ttt_full_game took 107.9s (PR run 46144326637). macOS
+# therefore gets 360s, about 4x the uncontended cost, which still catches a
+# hang. The macOS block is listed first so it wins on that host.
+[[profile.default.overrides]]
+filter = 'package(neovm-oracle-tests) and test(minimax)'
+platform = { host = 'cfg(target_os = "macos")' }
+slow-timeout = { period = "360s", terminate-after = 1 }
+
 [[profile.default.overrides]]
 filter = 'package(neovm-oracle-tests) and test(minimax)'
 slow-timeout = { period = "120s", terminate-after = 1 }
