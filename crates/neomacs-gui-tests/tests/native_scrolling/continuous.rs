@@ -122,16 +122,16 @@ pub(super) fn run(
         {
             thread::sleep(remaining);
         }
-        // Only paced sends have a slot to be late for; state-only runs
-        // inject back to back.
+        // One clock read per send serves both the send log and the lateness
+        // against the send's 120 Hz slot (`period` = PERIOD_NS). Only paced
+        // sends have a slot to be late for; state-only runs inject back to
+        // back.
+        const PERIOD_NS: u64 = 1_000_000_000 / 120;
+        let sent_elapsed_ns = started.elapsed().as_nanos() as u64;
         if mode == Mode::CalibratedPacing {
-            send_lateness_ns.push(
-                Instant::now()
-                    .saturating_duration_since(deadline)
-                    .as_nanos() as u64,
-            );
+            send_lateness_ns.push(sent_elapsed_ns.saturating_sub(PERIOD_NS * index as u64));
         }
-        sent_ns.push(started.elapsed().as_nanos() as u64);
+        sent_ns.push(sent_elapsed_ns);
         trackpad.scroll(if index < inputs / 2 { PIXELS } else { -PIXELS });
         // Observe progress without waiting for a timer or a command. Sampling
         // files is outside the editor and does not force its redisplay.
