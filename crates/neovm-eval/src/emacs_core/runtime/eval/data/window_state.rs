@@ -3432,6 +3432,29 @@ pub enum FrameCreationPhase {
 /// contains the band stays `explicit_size_omitted: false` and still reserves
 /// `tool_bar_height`. `free_frame_tool_bar` (`gtkutil.c:6168-6206`) returns
 /// the frame to `Unallocated { explicit_size_omitted: false }`.
+/// Whether a window-system frame holds the display's input focus: GNU's
+/// `FRAME_DISPLAY_INFO (f)->highlight_frame == f`.
+///
+/// GNU's display starts with no highlight frame (`highlight_frame` 0) and sets
+/// it only from a FocusIn (`x_frame_rehighlight`, xterm.c), so a frame is
+/// `Unfocused` from creation until its first native focus-in event.
+/// `get_window_cursor_type` treats the selected window of an unfocused frame
+/// as non-selected (xdisp.c:34670). Set only by native focus input, never
+/// from the Lisp `last-focus-update` parameter, which `handle-focus-in`
+/// derives from the same event.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrameDisplayFocus {
+    #[default]
+    Unfocused,
+    Focused,
+}
+
+impl FrameDisplayFocus {
+    pub const fn is_focused(self) -> bool {
+        matches!(self, Self::Focused)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolkitToolBar {
     Unallocated { explicit_size_omitted: bool },
@@ -3565,6 +3588,8 @@ pub struct Frame {
     pub tool_bar_height: u32,
     /// Linux toolkit allocation for this frame. See [`ToolkitToolBar`].
     pub toolkit_tool_bar: ToolkitToolBar,
+    /// Native input focus for a window-system frame. See [`FrameDisplayFocus`].
+    pub display_focus: FrameDisplayFocus,
     /// GNU `f->n_tool_bar_items` survives `free_frame_tool_bar`
     /// (`gtkutil.c:6168-6206`). A later positive line count calls
     /// `update_frame_tool_bar` immediately (`xfns.c:1902-1908`), and that
@@ -7067,6 +7092,7 @@ impl Frame {
             toolkit_tool_bar: ToolkitToolBar::Unallocated {
                 explicit_size_omitted: false,
             },
+            display_focus: FrameDisplayFocus::Unfocused,
             tool_bar_items_packed: false,
             compact_bar_height: 0,
             tab_bar_height: 0,

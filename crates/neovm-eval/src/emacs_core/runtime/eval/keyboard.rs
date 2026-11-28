@@ -2282,6 +2282,57 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[doc(hidden)]
+    /// Record a native focus change as GNU's `highlight_frame`: a FocusIn
+    /// makes its frame the display's one focused frame; a FocusOut clears it.
+    /// Each frame whose focus changed is redisplayed so its cursor switches
+    /// between the selected and the non-selected kind, as GNU's
+    /// `x_frame_rehighlight` redraws both frames' cursors (xterm.c).
+    pub(crate) fn note_native_frame_focus(&mut self, focused: bool, emacs_frame_id: u64) {
+        use crate::emacs_core::eval::data::window_state::FrameDisplayFocus;
+        let target = if emacs_frame_id == 0 {
+            self.frames.selected_frame().map(|frame| frame.id)
+        } else {
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
+        };
+        let Some(target) = target.filter(|fid| self.frames.get(*fid).is_some()) else {
+            return;
+        };
+        let mut changed = Vec::new();
+        for fid in self.frames.frame_list() {
+            let Some(frame) = self.frames.get_mut(fid) else {
+                continue;
+            };
+            let next = if fid == target {
+                if focused {
+                    FrameDisplayFocus::Focused
+                } else {
+                    FrameDisplayFocus::Unfocused
+                }
+            } else if focused {
+                // One highlight frame per display.
+                FrameDisplayFocus::Unfocused
+            } else {
+                frame.display_focus
+            };
+            if frame.display_focus != next {
+                frame.display_focus = next;
+                changed.push((fid, frame.window_list()));
+            }
+        }
+        for (fid, windows) in changed {
+            self.gnu_mark_frame_redisplay(fid);
+            for window in windows {
+                self.force_body_redisplay(
+                    crate::emacs_core::eval::data::window_state::ForcedBodyRedisplay::Window(
+                        window,
+                    ),
+                );
+                self.gnu_mark_window_redisplay(window);
+            }
+            self.invalidate_redisplay();
+        }
+    }
+
     pub fn make_lispy_focus_event(&self, focused: bool, emacs_frame_id: u64) -> Option<Value> {
         let frame = self.lispy_frame_event_target(emacs_frame_id)?;
         Some(Value::list(vec![
@@ -4988,6 +5039,7 @@ impl crate::emacs_core::eval::Context {
                 focused,
                 emacs_frame_id,
             } => {
+                self.note_native_frame_focus(focused, emacs_frame_id);
                 if !focused {
                     // A frame that loses focus mid-drag never sees the button
                     // come up, and a session nothing closes would suppress

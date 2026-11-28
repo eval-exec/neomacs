@@ -1043,6 +1043,69 @@ fn test_parse_cursor_spec_invalid_cons_falls_back_hollow_like_gnu() {
     assert_eq!(spec.bar_width, CursorBarWidth::DEFAULT);
 }
 
+/// GNU `get_window_cursor_type` (xdisp.c:34670): the SELECTED window of a
+/// window-system frame without the display's focus (`f != highlight_frame`)
+/// gets the non-selected cursor. A box becomes hollow, a bar one pixel
+/// narrower, and `cursor-in-non-selected-windows` nil hides it. The same
+/// window on a focused frame keeps its own cursor, and a terminal frame has
+/// no highlight frame to lose.
+#[test]
+fn test_effective_cursor_spec_selected_window_of_an_unfocused_frame_is_non_selected() {
+    use neovm_eval::emacs_core::eval::data::window_state::FrameDisplayFocus;
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = evaluator.buffer_manager_mut().create_buffer("*cursor*");
+    let frame_id = evaluator
+        .frame_manager_mut()
+        .create_frame("test", 800, 600, buf_id);
+    let spec_for = |evaluator: &neovm_eval::emacs_core::eval::Context| {
+        let frame = evaluator.frame_manager().get(frame_id).unwrap();
+        let buffer = evaluator.buffer_manager().get(buf_id).unwrap();
+        effective_cursor_spec(frame, buffer, WindowCursorRole::Active, false, Value::T)
+    };
+
+    // A terminal frame: active means the window's own cursor.
+    assert_eq!(
+        spec_for(&evaluator).unwrap().cursor_kind,
+        CursorKind::FilledBox
+    );
+
+    let frame = evaluator.frame_manager_mut().get_mut(frame_id).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    assert_eq!(
+        frame.display_focus,
+        FrameDisplayFocus::Unfocused,
+        "no FocusIn yet"
+    );
+    assert_eq!(
+        spec_for(&evaluator).unwrap().cursor_kind,
+        CursorKind::HollowBox
+    );
+
+    if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
+        buf.set_buffer_local("cursor-type", Value::symbol("bar"));
+    }
+    let unfocused_bar = spec_for(&evaluator).unwrap();
+    assert_eq!(unfocused_bar.cursor_kind, CursorKind::Bar);
+    assert_eq!(unfocused_bar.bar_width, CursorBarWidth::new(1));
+
+    if let Some(buf) = evaluator.buffer_manager_mut().get_mut(buf_id) {
+        buf.set_buffer_local("cursor-in-non-selected-windows", Value::NIL);
+    }
+    assert_eq!(
+        spec_for(&evaluator).unwrap().cursor_kind,
+        CursorKind::NoCursor
+    );
+
+    evaluator
+        .frame_manager_mut()
+        .get_mut(frame_id)
+        .unwrap()
+        .display_focus = FrameDisplayFocus::Focused;
+    let focused_bar = spec_for(&evaluator).unwrap();
+    assert_eq!(focused_bar.cursor_kind, CursorKind::Bar);
+    assert_eq!(focused_bar.bar_width, CursorBarWidth::new(2));
+}
+
 #[test]
 fn test_effective_cursor_spec_nonselected_box_becomes_hollow() {
     let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();

@@ -101,10 +101,34 @@ fn wayland_display_debug_dump_captures_last_presented_and_frame_snapshot() {
     let cursor_visible = primary["cursor_visible"]
         .as_bool()
         .expect("cursor_visible boolean");
+    // Inverse video is the FILLED box's paint. Which box is drawn depends on
+    // the cursor's role: the test display gives the frame no keyboard focus,
+    // so GNU (`get_window_cursor_type`, xdisp.c:34670) and Neomacs draw the
+    // non-selected, hollow box, which inverts nothing. The expectation follows
+    // the style the draw stage reports for this cursor, not an assumed role.
+    let drawn_style = doc["cursor_geometry_log"]
+        .as_array()
+        .expect("cursor_geometry_log array")
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|line| line.contains(" stage=draw "))
+        .filter_map(|line| line.split(" style=").nth(1)?.split(' ').next())
+        .last()
+        .unwrap_or_else(|| panic!("a stage=draw line with a cursor style: {raw}"))
+        .to_owned();
+    // Hollow is forced, not a choice: display-debug-dump.el never focuses
+    // the frame and the harness grants no focus, so the frame is not the
+    // highlight frame (GNU xdisp.c:34670) and `cursor-in-non-selected-windows'
+    // t makes its selected window's box hollow (xdisp.c:34702-34712). A
+    // regression that painted it filled must fail here.
+    assert_eq!(
+        drawn_style, "Hollow",
+        "the unfocused frame's selected window draws the non-selected box"
+    );
     assert_eq!(
         primary["inverse_video_active"].as_bool(),
-        Some(cursor_visible),
-        "filled-box cursor inverse_video_active must match cursor_visible: {primary}"
+        Some(cursor_visible && drawn_style == "FilledBox"),
+        "inverse_video_active must be a visible FILLED box's (drawn style {drawn_style}): {primary}"
     );
     assert_eq!(
         doc["diagnostics_flags"]["cursor_hidden_or_blinked_off"].as_bool(),

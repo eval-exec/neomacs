@@ -2102,11 +2102,16 @@ fn effective_cursor_spec(
         Some(frame_cursor_spec(frame))
     }?;
 
-    if cursor_role.is_active() {
+    // GNU `get_window_cursor_type` (xdisp.c:34670): the selected window of
+    // a window-system frame that does not hold the display's focus
+    // (`f != highlight_frame`) gets the non-selected cursor too.
+    let frame_focused =
+        frame.effective_window_system().is_none() || frame.display_focus.is_focused();
+    if cursor_role.is_active() && frame_focused {
         return Some(base);
     }
 
-    if is_minibuffer {
+    if !cursor_role.is_active() && is_minibuffer {
         return None;
     }
 

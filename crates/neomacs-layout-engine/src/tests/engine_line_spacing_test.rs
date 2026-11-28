@@ -1867,6 +1867,15 @@ fn stretch_cursor_only_replay_matches_fresh_width_policy() {
         {
             let (mut eval, frame, _, window) = incr_editing_frame("אxב\n", 800, 240);
             realize_test_gui_frame(&mut eval, frame);
+            // This row is about the width policy of the selected window's
+            // cursor, so the frame holds focus. An unfocused frame draws the
+            // non-selected cursor (GNU xdisp.c:34670), a bar one pixel
+            // narrower.
+            eval.frame_manager_mut()
+                .get_mut(frame)
+                .unwrap()
+                .display_focus =
+                neovm_eval::emacs_core::eval::data::window_state::FrameDisplayFocus::Focused;
             let cursor_type = match style {
                 "box" => Value::T,
                 "bar" => Value::cons(Value::symbol("bar"), Value::fixnum(2)),

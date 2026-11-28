@@ -1,7 +1,7 @@
 ;;; merged-face-attributes-gui-oracle.el --- #853 merged-face GNU/Neomacs GUI oracle -*- lexical-binding: t; -*-
 ;;
-;; State-gated (window-setup-hook -> redisplay -> write -> kill-emacs; zero
-;; sleeps or timers) oracle comparing merged face attributes, font-at weight
+;; State-gated (window-setup-hook -> focus -> redisplay -> write -> kill-emacs;
+;; no timers; the only waits poll for the frame's window and its focus-in) oracle comparing merged face attributes, font-at weight
 ;; and slant, cursor color parameters, and rendered foreground/background
 ;; colors across stacked text-property faces, :inherit chains, overlays
 ;; (including hl-line with and without :foreground, integer and cons
@@ -56,6 +56,35 @@
           (cons "x" (car xy))
           (cons "y" (cdr xy))
           (cons "next_y" (cdr next-xy)))))
+
+(defun p853-focus ()
+  "Give this Emacs's X window the input focus, then wait for its focus-in.
+The box-cursor inverse paint this oracle checks is the SELECTED cursor of a
+focused frame: GNU draws a hollow box on a frame without focus
+(`get_window_cursor_type', xdisp.c:34670), and the test display has no
+window manager to give focus.  State-gated: it waits for the focus-in."
+  (let* ((title (format "p853-%d" (emacs-pid)))
+         (pid (number-to-string (emacs-pid)))
+         (deadline (+ (float-time) 10))
+         (window-id
+          (lambda (&rest search)
+            (with-temp-buffer
+              (and (zerop (apply #'call-process "xdotool" nil t nil "search" "--onlyvisible"
+                                 search))
+                   (car (split-string (buffer-string)))))))
+         window)
+    (set-frame-parameter nil 'title title)
+    (while (not (setq window (or (funcall window-id "--pid" pid)
+                                 (funcall window-id "--name" (concat "^" title "$")))))
+      (when (> (float-time) deadline)
+        (error "xdotool found no viewable window for this frame"))
+      (sit-for 0.1))
+    (unless (zerop (call-process "xdotool" nil nil nil "windowfocus" "--sync" window))
+      (error "xdotool could not focus window %s" window))
+    (while (not (eq (frame-focus-state) t))
+      (when (> (float-time) deadline)
+        (error "No focus-in after xdotool: %S" (frame-focus-state)))
+      (sit-for 0.05))))
 
 (defun p853-run ()
   (condition-case err
@@ -189,6 +218,7 @@
             (hl-line-highlight)))
 
         (setq entries (nreverse entries))
+        (p853-focus)
         (redisplay t)
         (let* ((win (selected-window))
                (edges (window-inside-pixel-edges win))
