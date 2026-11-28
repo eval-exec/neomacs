@@ -285,6 +285,15 @@ static DEBUG_ON_EVENT: WellKnown = WellKnown::DebugOnEvent;
 #[path = "gc_generational.rs"]
 mod gc_generational;
 
+/// Per-slice sweep budget in cons blocks (each ~4096 cells); the slice
+/// reclaims proportionally more non-cons objects internally.
+const INCREMENTAL_SWEEP_BUDGET: usize = 8;
+
+/// Safe points a deferred sweep waits for allocation before it runs a slice
+/// anyway: the cycle's finalizers and `post-gc-hook` run only when the sweep
+/// completes, so a loop that does not allocate must still finish it.
+const SWEEP_SLICE_SAFE_POINT_BOUND: u64 = 1024;
+
 /// The collection policy is selected before the admitted start mutates the heap.
 #[derive(Clone, Copy, Debug)]
 enum ConcurrentCycleKind {
@@ -1694,9 +1703,6 @@ impl Context {
         // risk of a narrower rule.
         self.lexenv_assq_cache.clear();
         self.lexenv_special_cache.clear();
-        // Per-slice sweep budget in cons blocks (each ~4096 cells); the slice
-        // reclaims proportionally more non-cons objects internally.
-        const INCREMENTAL_SWEEP_BUDGET: usize = 8;
         let heap_ptr: *mut neovm_value::tagged::gc::TaggedHeap =
             self.tagged_heap.heap_root().as_ptr();
         // True only when a whole mark+sweep cycle finishes in this call, gating
@@ -1834,7 +1840,7 @@ impl Context {
                         //
                         // A sweep that allocation has outrun -- the NEXT cycle is
                         // already due -- finishes now, as the concurrent mark's cap
-                        // does. Slices come one per safe point, and a loop whose safe
+                        // does. Slices come at most one per safe point, and a loop whose safe
                         // points are sparse can cons faster than they reclaim: the next
                         // cycle cannot start until this one drains, so each cycle began
                         // with more garbage, swept longer, and set a higher threshold
@@ -3051,7 +3057,19 @@ impl Context {
         }
         match self.tagged_heap.mark_phase() {
             MarkPhase::Idle => {}
-            MarkPhase::Sweeping | MarkPhase::StoppedMarking => return true,
+            // A deferred sweep is paced by allocation, not by safe points:
+            // running a slice at every boundary turned the whole sweep into
+            // one burst between two allocation checkpoints. An overdue sweep
+            // is always due here, and the body drains it at once. A mutator
+            // that stops allocating still gets one slice every
+            // `SWEEP_SLICE_SAFE_POINT_BOUND` safe points.
+            MarkPhase::Sweeping => {
+                let due = self.tagged_heap.sweep_slice_due(INCREMENTAL_SWEEP_BUDGET)
+                    || self.eval_counter >= SWEEP_SLICE_SAFE_POINT_BOUND;
+                self.eval_counter = if due { 0 } else { self.eval_counter + 1 };
+                return due;
+            }
+            MarkPhase::StoppedMarking => return true,
             MarkPhase::ConcurrentRunning => {
                 return !self.concurrent_mark_is_still_the_gc_thread_s();
             }

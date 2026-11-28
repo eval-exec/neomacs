@@ -121,3 +121,309 @@ fn tty_erase_char_defaults_to_nil_and_is_special_like_gnu() {
         "a let of tty-erase-char must bind dynamically, as DEFVAR_LISP makes it special"
     );
 }
+
+/// A context whose paced deferred sweep is in progress and owes no slice to
+/// a mutator that does not allocate, with the `gcs-done` count before the
+/// cycle completes.
+fn context_with_a_paced_deferred_sweep() -> (crate::emacs_core::Context, u64) {
+    use neovm_value::heap_types::LispString;
+    // Select the concurrent (non-generational) collector for this heap only:
+    // the knob is read per heap, when the constructor runs, and the previous
+    // value is restored right after it.
+    let previous = std::env::var_os("NEOVM_GC_GENERATIONAL");
+    // SAFETY: nextest isolates each test in its own process; the variable is
+    // restored before any other code of this test runs.
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    let mut context = crate::test_utils::new_context();
+    // SAFETY: as above.
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("NEOVM_GC_GENERATIONAL", value),
+            None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+        }
+    }
+    neovm_eval::test_support::authority::set_gc_stress_for_test(&mut context, false);
+    context.gc_collect_exact();
+    // Unrooted strings fill arena pages the sweep visits a few per slice.
+    for i in 0..200_000u32 {
+        // SAFETY: test-only owner-thread allocation through the non-swappable
+        // mutable accessor; the view is used in place and never moved.
+        let _ = unsafe { context.tagged_heap_mut() }
+            .alloc_string(LispString::from_utf8(&format!("idle garbage {i:08}")));
+    }
+    // SAFETY: as above.
+    unsafe { context.tagged_heap_mut() }.set_gc_threshold(1);
+    // SAFETY: as above.
+    unsafe { context.tagged_heap_mut() }.alloc_cons(Value::NIL, Value::NIL);
+    let mut sweeping = false;
+    for _ in 0..100_000 {
+        context.gc_safe_point();
+        if context.tagged_heap().sweep_in_progress() {
+            sweeping = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(sweeping, "concurrent marking did not enter deferred sweep");
+    // A threshold far above anything allocated from here on: the paced
+    // sweep owes no slice to a mutator that does not allocate.
+    context.set_gc_threshold(1 << 40);
+    let completed = context.gc_count_for_test();
+    for _ in 0..1_000 {
+        context.gc_safe_point();
+    }
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "idle safe points finished the paced sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+    (context, completed)
+}
+
+#[test]
+fn an_idle_command_loop_finishes_a_paced_deferred_sweep() {
+    use super::command_loop::CommandLoopHost;
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.command_loop_1_idle_sweep();
+    assert!(!context.tagged_heap().sweep_in_progress());
+    assert_eq!(
+        context.gc_count_for_test(),
+        completed + 1,
+        "the idle command loop completes the cycle"
+    );
+}
+
+#[test]
+fn an_idle_sweep_stops_for_a_key_still_in_the_host_input_channel() {
+    use super::command_loop::CommandLoopHost;
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
+    // GNU `detect_input_pending_run_timers` reads the OS input queue
+    // (`get_input_pending` -> `gobble_input`, keyboard.c), so a key the
+    // frontend has sent but the loop has not yet staged is pending input.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    let publisher = crate::host_input::HostInputPublisher::install(&mut context);
+    publisher
+        .send(InputEvent::key_press(KeyEvent::char('x')))
+        .unwrap();
+    context.command_loop_1_idle_sweep();
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "a key still in the host input channel did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}
+
+#[test]
+fn an_idle_sweep_leaves_a_finished_input_stream_to_the_read() {
+    use super::command_loop::CommandLoopHost;
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
+    // The read after the sweep takes the queued key before it can see the
+    // closed channel; the sweep must not reach that end first.
+    let (mut context, _) = context_with_a_paced_deferred_sweep();
+    let publisher = crate::host_input::HostInputPublisher::install(&mut context);
+    publisher
+        .send(InputEvent::key_press(KeyEvent::char('x')))
+        .unwrap();
+    drop(publisher);
+    context.command_loop_1_idle_sweep();
+    let receiver = context.input_rx().as_ref();
+    assert!(
+        receiver.is_some(),
+        "the idle sweep closed the input terminal"
+    );
+    assert_eq!(
+        receiver.map(|rx| rx.len()),
+        Some(1),
+        "the idle sweep took the key the read is owed"
+    );
+}
+
+#[test]
+fn the_command_loop_finishes_a_paced_deferred_sweep_before_its_first_input_wait() {
+    use super::command_loop::CommandLoopHost;
+    // GNU `read_char` collects before it waits when no input is pending
+    // (keyboard.c:2975-2977), so a sweep already in progress when the loop
+    // starts (after startup, say) must not wait for the first command.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.command_loop_mut().running = true;
+    // No input source: the first read reaches end of input and the loop
+    // returns without running a command.
+    let result = context.command_loop_1();
+    assert!(
+        result.is_ok(),
+        "the command loop failed before its first read"
+    );
+    assert!(
+        !context.tagged_heap().sweep_in_progress(),
+        "the first input wait left the deferred sweep unfinished"
+    );
+    assert_eq!(context.gc_count_for_test(), completed + 1);
+}
+
+#[test]
+fn a_key_read_inside_a_user_hash_test_leaves_the_deferred_sweep_deferred() {
+    // A user hash-table test holds collection off (GNU inhibits GC around
+    // the user's test and hash functions).  A key read inside it reaches
+    // the pre-wait drain with no input pending; the drain must not run the
+    // deferred sweep, whose completion work would run inside the callback.
+    let (mut context, _completed) = context_with_a_paced_deferred_sweep();
+    context
+        .eval_str(
+            r#"(progn
+                 (fset 'timer-event-handler
+                       (lambda (timer)
+                         (setq timer-idle-list (delq timer timer-idle-list))
+                         (apply (aref timer 5) (aref timer 6))))
+                 (fset 'idle-sweep-test-end-read
+                       (lambda () (throw 'idle-sweep-test 'waited)))
+                 (setq timer-idle-list
+                       (list (vector nil 0 0 0 nil 'idle-sweep-test-end-read
+                                     nil t 0 nil)))
+                 (setq idle-sweep-gcs-in-test nil)
+                 (define-hash-table-test 'idle-sweep-collide
+                   (lambda (a b)
+                     (let ((before gcs-done))
+                       (catch 'idle-sweep-test (read-key-sequence "key: "))
+                       (setq idle-sweep-gcs-in-test (- gcs-done before)))
+                     (eq a b))
+                   (lambda (_key) 0)))"#,
+        )
+        .expect("install the idle timer and the colliding hash test");
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "installing the hash test finished the paced sweep"
+    );
+    let result = context.eval_str(
+        r#"(let ((table (make-hash-table :test 'idle-sweep-collide)))
+             (puthash 'a 1 table)
+             (puthash 'b 2 table)
+             idle-sweep-gcs-in-test)"#,
+    );
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK 0",
+        "the key read inside the user hash test finished a collection"
+    );
+}
+
+#[test]
+fn a_key_read_finishes_an_idle_sweep_after_a_mouse_motion_it_consumes() {
+    use crate::emacs_core::eval::keyboard::{InputEvent, Modifiers};
+    // With `track-mouse` nil a motion is no pending input in GNU
+    // (`some_mouse_moved`, keyboard.c:1296), so `read_char` collects before
+    // it waits (keyboard.c:2976-2977).  The pre-read drain stops for the
+    // motion still in the channel; the read consumes it without returning a
+    // key and must finish the sweep before it waits.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    let publisher = crate::host_input::HostInputPublisher::install(&mut context);
+    publisher
+        .send(InputEvent::MouseMove {
+            x: 1.0,
+            y: 1.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: 0,
+        })
+        .unwrap();
+    // A zero-delay idle timer ends the read once it waits: idle timers run
+    // only after the read has started its idle epoch.
+    context
+        .eval_str(
+            r#"(progn
+                 (fset 'timer-event-handler
+                       (lambda (timer)
+                         (setq timer-idle-list (delq timer timer-idle-list))
+                         (apply (aref timer 5) (aref timer 6))))
+                 (fset 'idle-sweep-test-end-read
+                       (lambda () (throw 'idle-sweep-test 'waited)))
+                 (setq timer-idle-list
+                       (list (vector nil 0 0 0 nil 'idle-sweep-test-end-read
+                                     nil t 0 nil))))"#,
+        )
+        .expect("install the idle timer that ends the read");
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "installing the idle timer finished the paced sweep"
+    );
+    let result =
+        context.eval_str(r#"(catch 'idle-sweep-test (read-key-sequence "key: ") 'read-returned)"#);
+    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK waited");
+    assert!(
+        !context.tagged_heap().sweep_in_progress(),
+        "the read waited with the deferred sweep unfinished"
+    );
+    assert_eq!(context.gc_count_for_test(), completed + 1);
+    drop(publisher);
+}
+
+#[test]
+fn an_idle_sweep_leaves_a_ready_keyboard_macro_key_to_the_read() {
+    use super::command_loop::CommandLoopHost;
+    // GNU `read_char` returns the next key of an executing keyboard macro
+    // (keyboard.c:2659-2680) and asks for a collection only when INTERACTIVE,
+    // which excludes an executing macro (commands.h:28, keyboard.c:2932).
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.begin_executing_kbd_macro_runtime(vec![Value::fixnum('x' as i64)]);
+    context.command_loop_1_idle_sweep();
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "a keyboard macro key ready for the read did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+    assert_eq!(
+        context.command_loop().keyboard.kboard.kbd_macro_index,
+        0,
+        "the idle sweep consumed the macro key the read is owed"
+    );
+}
+
+#[test]
+fn an_idle_sweep_skips_while_macro_playback_has_no_remaining_key() {
+    use super::command_loop::CommandLoopHost;
+    // GNU's INTERACTIVE is false for the whole playback, including after the
+    // final event has been consumed and before read_char reports its end.
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context.begin_executing_kbd_macro_runtime(vec![Value::fixnum('x' as i64)]);
+    context.command_loop_mut().keyboard.kboard.kbd_macro_index = 1;
+
+    context.command_loop_1_idle_sweep();
+
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "active macro playback without a remaining key did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}
+
+#[test]
+fn an_idle_sweep_stops_for_unread_post_input_method_events() {
+    use super::command_loop::CommandLoopHost;
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context
+        .eval_str("(setq unread-post-input-method-events '(x))")
+        .expect("set unread-post-input-method-events");
+
+    context.command_loop_1_idle_sweep();
+
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "queued post-input-method event did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}
+
+#[test]
+fn an_idle_sweep_stops_for_unread_input_method_events() {
+    use super::command_loop::CommandLoopHost;
+    let (mut context, completed) = context_with_a_paced_deferred_sweep();
+    context
+        .eval_str("(setq unread-input-method-events '(x))")
+        .expect("set unread-input-method-events");
+
+    context.command_loop_1_idle_sweep();
+
+    assert!(
+        context.tagged_heap().sweep_in_progress(),
+        "queued input-method event did not stop the idle sweep"
+    );
+    assert_eq!(context.gc_count_for_test(), completed);
+}

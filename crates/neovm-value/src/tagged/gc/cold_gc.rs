@@ -280,6 +280,9 @@ const _: () = {
                 + size_of::<super::cycle_time_bank::GcCycleTimeBank>()
                 + size_of::<super::publication_roots::PublishedPayloadRoots>()
                 + size_of::<Option<super::native_deferred::PendingNativeDestroys>>()
+                // The deferred sweep's young-list survivor and window-cons terms.
+                + size_of::<usize>()
+                + size_of::<u64>()
     );
     assert!(align_of::<TaggedHeap>() == 8);
     assert!(offset_of!(TaggedHeap, mutator_gc) == 24);

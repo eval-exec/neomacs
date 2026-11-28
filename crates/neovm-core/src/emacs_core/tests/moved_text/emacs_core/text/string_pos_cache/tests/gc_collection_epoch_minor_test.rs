@@ -158,7 +158,8 @@ fn finish_minor(context: &mut Context, completed: usize) {
     // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
     unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     for _ in 0..10_000 {
-        context.gc_safe_point();
+        // A safe point paces sweep slices by allocation; drive them.
+        context.gc_collect_from_current_roots();
         if !context.tagged_heap().sweep_in_progress() {
             assert!(!context.tagged_heap().mark_in_progress());
             assert!(!context.tagged_heap().concurrent_mark_running());

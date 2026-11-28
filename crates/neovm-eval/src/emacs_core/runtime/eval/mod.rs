@@ -3851,7 +3851,9 @@ pub struct Context {
     /// `depth_for_test` and set it through the AUTHORITY setter fence, so a
     /// cross-crate write is a compile error, not a ledger audit.
     pub(crate) depth: usize,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    /// Safe points since a deferred sweep last owed a slice
+    /// (`gc_safe_point_exact_should_collect_slow`); read only while one is
+    /// in progress.
     eval_counter: u64,
     /// Maximum recursion depth.
     pub(crate) max_depth: usize,
