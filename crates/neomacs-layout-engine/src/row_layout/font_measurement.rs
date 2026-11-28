@@ -250,12 +250,7 @@ impl FontMeasurementSnapshot {
         let mut bytes = std::mem::size_of::<Self>();
         for face in faces {
             let font = fonts
-                .resolved_font_for_face(
-                    &face.font_family,
-                    face.font_weight,
-                    face.italic,
-                    face.font_size.max(1.0),
-                )
+                .resolved_font_for_face_selection(face.font_selection())
                 .ok_or(RowProgramError::Unsupported)?;
             let receipt = PrimaryFontReceipt::of(face.face_id, font);
             bytes = bytes.saturating_add(receipt.bytes());
@@ -334,7 +329,9 @@ impl FontMeasurementSnapshot {
                     .with_fontset(frame, face, face_epoch);
             let _ = fonts.resolved_font_for_realized_face_char(ch, selection);
         }
-        let policy = fonts.capture_worker_font_policy_for_faces(
+        let face_families: Vec<&str> = faces.iter().map(|face| face.font_family.as_ref()).collect();
+        let policy = fonts.capture_worker_font_policy_for_faces_and_primary(
+            &face_families,
             &requests,
             budget.capture_bytes.saturating_sub(bytes),
         )?;
@@ -507,6 +504,10 @@ impl WorkerFontMeasurements {
             DeviceScale::new(f32::from_bits(snapshot.revision.scale_bits))
                 .map_err(|_| RowProgramError::Unsupported)?,
         );
+        // Install the evaluator-captured policy BEFORE resolving any face on
+        // the worker thread so face-primary lookup never touches live
+        // `ALTERNATIVE_FONT_FAMILY_ALIST`.
+        service.install_worker_font_policy(&snapshot.policy);
         for face in faces {
             let expected = snapshot
                 .receipts
@@ -517,12 +518,7 @@ impl WorkerFontMeasurements {
                 return Err(RowProgramError::Cancelled);
             }
             let actual = service
-                .resolved_font_for_face(
-                    &face.font_family,
-                    face.font_weight,
-                    face.italic,
-                    face.font_size.max(1.0),
-                )
+                .resolved_font_for_face_selection(face.font_selection())
                 .map(|font| PrimaryFontReceipt::of(face.face_id, font))
                 .ok_or(RowProgramError::MissingMeasurement)?;
             // A newly opened font must agree with the frame's selected font.
@@ -540,9 +536,6 @@ impl WorkerFontMeasurements {
                 self.faces.push(key);
             }
         }
-        // The worker keeps opened fallbacks until `clear_caches`, the same
-        // lifetime as the main thread.
-        service.install_worker_font_policy(&snapshot.policy);
         Ok(service)
     }
 }

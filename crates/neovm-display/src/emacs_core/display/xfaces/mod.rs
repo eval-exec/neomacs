@@ -101,20 +101,26 @@ pub fn ensure_startup_compat_variables(eval: &mut neovm_eval::emacs_core::eval::
     // the pdump-restored Lisp variables (`faces.el:150`, `xfaces.c:6956`).
     // GNU stores these in GC-rooted `Vface_alternative_font_*_alist`, so they
     // survive dumping; Neomacs holds them in process-local statics that start
-    // empty after loading a dump image.
+    // empty after loading a dump image. Never reset `FACE_ATTR_STATE` here:
+    // `restore_created_faces_from_table` has already repopulated
+    // `created_lisp_faces` for the dumped faces.
+    rehydrate_alternative_font_alists(eval);
+}
+
+fn rehydrate_alternative_font_alists(eval: &mut neovm_eval::emacs_core::eval::Context) {
     if let Some(value) = eval
         .obarray()
         .canonical_value_by_name(CanonicalAccess::BOOTSTRAP, "face-font-family-alternatives")
         && !value.is_nil()
     {
-        let _ = builtin_internal_set_alternative_font_family_alist(eval, vec![value]);
+        let _ = apply_alternative_font_family_alist(eval, value);
     }
     if let Some(value) = eval.obarray().canonical_value_by_name(
         CanonicalAccess::BOOTSTRAP,
         "face-font-registry-alternatives",
     ) && !value.is_nil()
     {
-        let _ = builtin_internal_set_alternative_font_registry_alist(vec![value]);
+        let _ = apply_alternative_font_registry_alist(value);
     }
 }
 
@@ -5970,15 +5976,11 @@ pub fn builtin_internal_set_font_selection_order(args: Vec<Value>) -> EvalResult
     ))
 }
 
-/// `(internal-set-alternative-font-family-alist ALIST)` -- normalize string
-/// entries to symbols and return the normalized list.
-#[doc(hidden)]
-pub fn builtin_internal_set_alternative_font_family_alist(
+fn apply_alternative_font_family_alist(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    args: Vec<Value>,
+    raw: Value,
 ) -> EvalResult {
-    expect_args("internal-set-alternative-font-family-alist", &args, 1)?;
-    let entries = proper_list_to_vec_or_listp_error(&args[0])?;
+    let entries = proper_list_to_vec_or_listp_error(&raw)?;
     let mut normalized = Vec::with_capacity(entries.len());
     let mut alist = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -6011,17 +6013,27 @@ pub fn builtin_internal_set_alternative_font_family_alist(
         }
         normalized.push(Value::list(converted));
     }
+    // GNU `xfaces.c:5881` calls `free_all_realized_faces (Qnil)`, which
+    // invalidates realized font selection caches (via `invalidate_font_selection_policy`
+    // inside `replace_alternative_font_family_alist`) without resetting Lisp face
+    // definitions in `FACE_ATTR_STATE`.
     replace_alternative_font_family_alist(alist);
-    clear_font_cache_state();
     Ok(Value::list(normalized))
 }
 
-/// `(internal-set-alternative-font-registry-alist ALIST)` -- downcase string
-/// entries and return the normalized list.
+/// `(internal-set-alternative-font-family-alist ALIST)` -- normalize string
+/// entries to symbols and return the normalized list.
 #[doc(hidden)]
-pub fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Value>) -> EvalResult {
-    expect_args("internal-set-alternative-font-registry-alist", &args, 1)?;
-    let entries = proper_list_to_vec_or_listp_error(&args[0])?;
+pub fn builtin_internal_set_alternative_font_family_alist(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("internal-set-alternative-font-family-alist", &args, 1)?;
+    apply_alternative_font_family_alist(eval, args[0])
+}
+
+fn apply_alternative_font_registry_alist(raw: Value) -> EvalResult {
+    let entries = proper_list_to_vec_or_listp_error(&raw)?;
     let mut normalized = Vec::with_capacity(entries.len());
     let mut alist = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -6044,10 +6056,19 @@ pub fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Value>) ->
         }
         normalized.push(Value::list(converted));
     }
+    // GNU `xfaces.c:5909` invalidates realized faces without resetting Lisp face
+    // definitions in `FACE_ATTR_STATE`.
     replace_alternative_font_registry_alist(alist);
     crate::emacs_core::fontset::invalidate_font_selection_policy();
-    clear_font_cache_state();
     Ok(Value::list(normalized))
+}
+
+/// `(internal-set-alternative-font-registry-alist ALIST)` -- downcase string
+/// entries and return the normalized list.
+#[doc(hidden)]
+pub fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Value>) -> EvalResult {
+    expect_args("internal-set-alternative-font-registry-alist", &args, 1)?;
+    apply_alternative_font_registry_alist(args[0])
 }
 
 // ---------------------------------------------------------------------------

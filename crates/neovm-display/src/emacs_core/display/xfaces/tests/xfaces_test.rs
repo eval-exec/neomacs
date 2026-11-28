@@ -577,3 +577,97 @@ fn ensure_startup_compat_variables_rehydrates_alternative_font_family_alist() {
         "pdump startup must rehydrate process-global alternative font families from face-font-family-alternatives"
     );
 }
+
+#[test]
+fn ensure_startup_compat_variables_preserves_restored_created_faces_and_ids() {
+    crate::test_utils::init_test_tracing();
+    clear_font_cache_state();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let custom_face = "neo-672-dumped-custom-face";
+    restore_created_faces_from_table(&[custom_face.to_owned()]);
+    ensure_dynamic_face_id(custom_face);
+    let (id_before, next_before) = FACE_ATTR_STATE.with(|slot| {
+        let state = slot.borrow();
+        (
+            state
+                .created_face_ids
+                .get(&face_symbol_id(custom_face))
+                .copied()
+                .expect("dynamic face id assigned"),
+            state.next_created_face_id,
+        )
+    });
+    assert!(is_created_lisp_face(custom_face));
+
+    eval.set_variable(
+        "face-font-family-alternatives",
+        Value::list(vec![Value::list(vec![
+            Value::string("Monospace Serif"),
+            Value::string("FreeMono"),
+        ])]),
+    );
+    eval.set_variable(
+        "face-font-registry-alternatives",
+        Value::list(vec![Value::list(vec![
+            Value::string("gb2312.1980"),
+            Value::string("gb2312.80&gb8565.88"),
+        ])]),
+    );
+
+    ensure_startup_compat_variables(&mut eval);
+
+    assert!(
+        is_created_lisp_face(custom_face),
+        "ensure_startup_compat_variables must not wipe restored created_lisp_faces"
+    );
+    let (id_after, next_after) = FACE_ATTR_STATE.with(|slot| {
+        let state = slot.borrow();
+        (
+            state
+                .created_face_ids
+                .get(&face_symbol_id(custom_face))
+                .copied(),
+            state.next_created_face_id,
+        )
+    });
+    assert_eq!(
+        id_after,
+        Some(id_before),
+        "restored created_face_ids must survive startup rehydration"
+    );
+    assert_eq!(
+        next_after, next_before,
+        "next_created_face_id must not reset and collide with stamped face ids"
+    );
+
+    // Calling the Lisp builtins directly at runtime must also preserve Lisp face definitions.
+    let _ = builtin_internal_set_alternative_font_family_alist(
+        &mut eval,
+        vec![Value::list(vec![Value::list(vec![
+            Value::string("Monospace Serif"),
+            Value::string("FreeMono"),
+        ])])],
+    )
+    .expect("family alist builtin");
+    let _ =
+        builtin_internal_set_alternative_font_registry_alist(vec![Value::list(vec![Value::list(
+            vec![Value::string("iso8859-1"), Value::string("iso10646-1")],
+        )])])
+        .expect("registry alist builtin");
+    assert!(
+        is_created_lisp_face(custom_face),
+        "internal-set-alternative-font-*-alist must not wipe Lisp face definitions"
+    );
+    let (id_after_builtin, next_after_builtin) = FACE_ATTR_STATE.with(|slot| {
+        let state = slot.borrow();
+        (
+            state
+                .created_face_ids
+                .get(&face_symbol_id(custom_face))
+                .copied(),
+            state.next_created_face_id,
+        )
+    });
+    assert_eq!(id_after_builtin, Some(id_before));
+    assert_eq!(next_after_builtin, next_before);
+}

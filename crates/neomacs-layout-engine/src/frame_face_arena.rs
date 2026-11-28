@@ -90,6 +90,9 @@ fn same_face_realization(left: &Face, right: &Face) -> bool {
         default_resolved_font_id: _,
         stipple,
         underline_placement,
+        font_foundry,
+        font_slant,
+        font_width,
     } = left;
     tty_space_identity == &right.tty_space_identity
         && foreground == &right.foreground
@@ -104,6 +107,9 @@ fn same_face_realization(left: &Face, right: &Face) -> bool {
         && strike_through_color == &right.strike_through_color
         && box_color == &right.box_color
         && font_family == &right.font_family
+        && font_foundry == &right.font_foundry
+        && font_slant == &right.font_slant
+        && font_width == &right.font_width
         && font_size == &right.font_size
         && font_weight == &right.font_weight
         && attributes == &right.attributes

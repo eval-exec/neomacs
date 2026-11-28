@@ -45,9 +45,12 @@ pub(crate) struct DisplayRowFace {
     pub(crate) use_default_foreground: bool,
     pub(crate) use_default_background: bool,
     pub(crate) font_family: neomacs_display_protocol::face::FaceString,
+    pub(crate) font_foundry: Option<neomacs_display_protocol::face::FaceString>,
     pub(crate) font_file_path: Option<neomacs_display_protocol::face::FaceString>,
     pub(crate) font_weight: u16,
     pub(crate) italic: bool,
+    pub(crate) font_slant: neovm_core::face::FontSlant,
+    pub(crate) font_width: neovm_core::face::FontWidth,
     pub(crate) font_size: f32,
     pub(crate) underline_style: u8,
     pub(crate) underline_color: Option<Color>,
@@ -181,13 +184,16 @@ impl DisplayRowFaceMetrics {
 }
 
 impl DisplayRowFace {
-    fn font_selection(&self) -> crate::font::metrics::RealizedFaceFontSelection<'_> {
+    pub(crate) fn font_selection(&self) -> crate::font::metrics::RealizedFaceFontSelection<'_> {
         crate::font::metrics::RealizedFaceFontSelection::new(
             &self.font_family,
             self.font_weight,
             self.italic,
             self.font_size.max(1.0),
         )
+        .with_foundry(self.font_foundry.as_deref())
+        .with_slant(self.font_slant)
+        .with_width(self.font_width)
     }
 
     pub(crate) fn from_resolved(face_id: FaceId, face: &ResolvedFace) -> Self {
@@ -209,9 +215,12 @@ impl DisplayRowFace {
             use_default_foreground: face.use_default_foreground,
             use_default_background: face.use_default_background,
             font_family,
+            font_foundry: face.font_foundry.clone(),
             font_file_path: None,
             font_weight: face.font_weight,
             italic: face.italic,
+            font_slant: face.font_slant,
+            font_width: face.font_width,
             font_size: face.font_size,
             underline_style: face.underline_style,
             underline_color: (face.underline_style > 0)
@@ -338,6 +347,9 @@ impl DisplayRowFace {
             }),
             stipple: self.stipple.clone(),
             underline_placement: self.underline_position,
+            font_foundry: self.font_foundry.clone(),
+            font_slant: Some(self.font_slant.gnu_numeric()),
+            font_width: Some(self.font_width.gnu_numeric()),
         }
     }
 }
@@ -501,12 +513,16 @@ impl<'a> DisplayRowFaceRealizer<'a> {
 
     fn measured_font_metrics_for_face(&mut self, face: &DisplayRowFace) -> Option<FontMetrics> {
         self.font_metrics.as_mut().map(|svc| {
-            svc.font_metrics(
+            let selection = crate::font::metrics::RealizedFaceFontSelection::new(
                 &face.font_family,
                 face.font_weight,
                 face.italic,
                 face.font_size,
             )
+            .with_foundry(face.font_foundry.as_deref())
+            .with_slant(face.font_slant)
+            .with_width(face.font_width);
+            svc.font_metrics_for_selection(selection)
         })
     }
 
@@ -785,12 +801,10 @@ impl DisplayGlyphMeasurer for DisplayRowGlyphMeasurer<'_> {
             return None;
         }
         let face = self.face(face_id)?;
-        let metrics = self.font_metrics.as_mut()?.font_metrics(
-            &face.font_family,
-            face.font_weight,
-            face.italic,
-            face.font_size.max(1.0),
-        );
+        let metrics = self
+            .font_metrics
+            .as_mut()?
+            .font_metrics_for_selection(face.font_selection());
         (metrics.line_height > 0.0).then(|| {
             crate::display_row::builder::DisplayRowVerticalMetrics::new(
                 metrics.line_height,
@@ -804,12 +818,10 @@ impl DisplayGlyphMeasurer for DisplayRowGlyphMeasurer<'_> {
             return None;
         }
         let face = self.face(face_id)?;
-        let metrics = self.font_metrics.as_mut()?.font_metrics(
-            &face.font_family,
-            face.font_weight,
-            face.italic,
-            face.font_size.max(1.0),
-        );
+        let metrics = self
+            .font_metrics
+            .as_mut()?
+            .font_metrics_for_selection(face.font_selection());
         (metrics.space_width.is_finite() && metrics.space_width > 0.0)
             .then_some(metrics.space_width)
     }

@@ -332,7 +332,11 @@ fn realized_face_complex_run_shapes_with_the_exact_materialized_fontset_font() {
     let materialized = svc
         .materialized_font_for_realized_face_char('क', selection)
         .expect("materialized fontset font");
-    assert_eq!(materialized.font.family, "JetBrainsMono Nerd Font");
+    // `NoCandidateFontBackend` returns `None`, so cosmic-text opens a
+    // Devanagari fontdb fallback; `opened_font_family` records that opened
+    // font's real family rather than stamping the unrelated requested family.
+    assert!(!materialized.font.family.is_empty());
+    assert_ne!(materialized.font.family, "JetBrainsMono Nerd Font");
     assert_eq!(
         materialized.resolution,
         FontResolutionSource::FontsetFallback
@@ -5919,6 +5923,18 @@ fn face_primary_consults_alternative_families_and_records_opened_family() {
         missing.resolved.identity.file_path.as_deref(),
         Some(hack.as_str())
     );
+
+    // Layout face realization (`realize_face_font`) and `char_width_for_realized_face`
+    // must carry the face's inherited `:foundry "SRC"` and open the exact same
+    // font ("Hack") that `(face-font)` reports, never drifting to "DejaVu Sans Mono".
+    let mut protocol_face = neomacs_display_protocol::face::Face::default();
+    protocol_face.font_family = std::sync::Arc::from("NoSuchFamilyFor672");
+    protocol_face.font_foundry = Some(std::sync::Arc::from("SRC"));
+    protocol_face.font_size = 14.0;
+    let realized = realize_face_font(&mut protocol_face, &mut svc)
+        .expect("realize_face_font must resolve missing family via inherited foundry");
+    assert_eq!(realized.family, "Hack");
+    assert_eq!(realized.identity.file_path.as_deref(), Some(hack.as_str()));
     drop(eval);
 }
 
@@ -5981,4 +5997,20 @@ fn fontdb_fallback_records_opened_font_family_without_poisoning_instance_cache()
     assert_eq!(second.resolved.family, first.resolved.family);
     assert_ne!(second.resolved.family, "NoSuchFamilyFor672");
     assert_ne!(second.resolved.family, "Monospace Serif");
+}
+
+#[test]
+fn non_ascii_fontdb_fallback_records_opened_font_family_not_requested() {
+    let mut svc = make_svc();
+    svc.font_resolver
+        .replace_backend(Box::new(NoCandidateFontBackend));
+    let selection = RealizedFaceFontSelection::new("NoSuchFamilyFor672", 400, false, 13.0);
+    let materialized = svc
+        .materialized_font_for_realized_face_char('क', selection)
+        .expect("materialized non-ASCII fontdb fallback");
+    assert!(!materialized.font.family.is_empty());
+    assert_ne!(
+        materialized.font.family, "NoSuchFamilyFor672",
+        "materialize_requested_char_font must record the opened fontdb face's real family, not the unresolved requested family"
+    );
 }

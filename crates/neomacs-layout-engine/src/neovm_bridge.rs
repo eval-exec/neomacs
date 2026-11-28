@@ -4563,10 +4563,16 @@ pub struct ResolvedFace {
     pub use_default_background: bool,
     /// Font family name.
     pub font_family: neomacs_display_protocol::face::FaceString,
+    /// Font foundry name (e.g. `"SRC"`), inherited from `default`.
+    pub font_foundry: Option<neomacs_display_protocol::face::FaceString>,
     /// Font weight (CSS 100-900).
     pub font_weight: u16,
     /// Italic flag.
     pub italic: bool,
+    /// Full GNU font slant (normal, italic, oblique, reverse-italic, reverse-oblique).
+    pub font_slant: neovm_core::face::FontSlant,
+    /// Full GNU font width (ultra-condensed .. ultra-expanded).
+    pub font_width: neovm_core::face::FontWidth,
     /// Font size in pixels.
     pub font_size: f32,
     /// Merged logical `:height` in tenths of a point (`LFACE_HEIGHT_INDEX`),
@@ -4654,8 +4660,11 @@ impl Default for ResolvedFace {
             use_default_foreground: false,
             use_default_background: false,
             font_family: neomacs_display_protocol::face::empty_face_string(),
+            font_foundry: None,
             font_weight: 400,
             italic: false,
+            font_slant: neovm_core::face::FontSlant::Normal,
+            font_width: neovm_core::face::FontWidth::Normal,
             font_size: 14.0,
             font_height_tenths: None,
             underline_style: 0,
@@ -4710,8 +4719,11 @@ impl PartialEq for ResolvedFace {
             && self.use_default_foreground == other.use_default_foreground
             && self.use_default_background == other.use_default_background
             && self.font_family == other.font_family
+            && self.font_foundry == other.font_foundry
             && self.font_weight == other.font_weight
             && self.italic == other.italic
+            && self.font_slant == other.font_slant
+            && self.font_width == other.font_width
             && self.font_size == other.font_size
             && self.font_height_tenths == other.font_height_tenths
             && self.underline_style == other.underline_style
@@ -7830,13 +7842,28 @@ impl FaceResolver {
         if let Some(family) = face.family_runtime_string_shared() {
             rf.font_family = family;
         }
+        // Font foundry
+        if let Some(foundry) = face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()))
+            .filter(|value| !value.is_empty())
+        {
+            rf.font_foundry = Some(std::sync::Arc::from(foundry));
+        }
         // Font weight
         if let Some(w) = &face.weight {
             rf.font_weight = w.css_weight();
         }
         // Font slant
         if let Some(s) = &face.slant {
+            rf.font_slant = *s;
             rf.italic = s.is_italic();
+        }
+        // Font width
+        if let Some(w) = &face.width {
+            rf.font_width = *w;
         }
         // Font height
         if let Some(h) = &face.height {

@@ -14,6 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(crate) struct FrozenCharacterPolicies {
     pub(super) generation: FontSelectionRevision,
     queries: HashMap<CharCacheKey, FrozenCharacterQuery>,
+    /// Evaluator-captured alternative-family lists for face primary resolution
+    /// on worker threads, so background layout never reads live
+    /// `ALTERNATIVE_FONT_FAMILY_ALIST`.
+    primary_families: HashMap<String, FrozenFontFamilies>,
     bytes: usize,
 }
 
@@ -29,6 +33,12 @@ pub(super) struct WorkerPolicy {
     pub policies: Arc<FrozenCharacterPolicies>,
     missing: AtomicBool,
     pub(super) admitted_queries: HashSet<CharCacheKey>,
+}
+
+impl WorkerPolicy {
+    pub(super) fn mark_missing(&self) {
+        self.missing.store(true, Ordering::Relaxed);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,15 +84,34 @@ impl FrozenCharacterPolicies {
         if queries.len() > query_limit {
             return Err(FontPolicyMergeError::Budget);
         }
+        let mut primary_families = self.primary_families.clone();
+        for (family, inherited) in &other.primary_families {
+            match primary_families.entry(family.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    if entry.get() != inherited {
+                        return Err(FontPolicyMergeError::Changed);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(inherited.clone());
+                }
+            }
+        }
         let bytes = queries
             .keys()
             .try_fold(std::mem::size_of::<Self>(), |bytes, key| {
                 bytes.checked_add(Self::query_bytes(&key.family)?)
             })
+            .and_then(|bytes| {
+                primary_families.keys().try_fold(bytes, |bytes, family| {
+                    bytes.checked_add(Self::primary_family_bytes(family)?)
+                })
+            })
             .ok_or(FontPolicyMergeError::Budget)?;
         Ok(Self {
             generation: self.generation,
             queries,
+            primary_families,
             bytes,
         })
     }
@@ -120,13 +149,51 @@ impl FrozenCharacterPolicies {
         )],
         max_bytes: usize,
     ) -> Result<Self, FontPolicyCaptureError> {
+        Self::capture_for_fontsets_and_primary_families(&[], requests, max_bytes)
+    }
+
+    pub(crate) fn capture_for_fontsets_and_primary_families(
+        face_families: &[&str],
+        requests: &[(
+            &str,
+            char,
+            u16,
+            bool,
+            FontSelectionSize,
+            crate::font::fallback_order::FaceFontsetId,
+        )],
+        max_bytes: usize,
+    ) -> Result<Self, FontPolicyCaptureError> {
         let generation = FontSelectionRevision::try_from(fontset_generation())
             .map_err(map_fontset_capture_error)?;
         let mut snapshot = Self {
             generation,
             queries: HashMap::default(),
+            primary_families: HashMap::default(),
             bytes: std::mem::size_of::<Self>(),
         };
+        for &family in face_families {
+            if snapshot.primary_families.contains_key(family) {
+                continue;
+            }
+            let family_bytes =
+                Self::primary_family_bytes(family).ok_or(FontPolicyCaptureError::Budget)?;
+            let bytes = snapshot
+                .bytes
+                .checked_add(family_bytes)
+                .ok_or(FontPolicyCaptureError::Budget)?;
+            if bytes > max_bytes {
+                return Err(FontPolicyCaptureError::Budget);
+            }
+            let inherited =
+                capture_alternative_font_families(family).map_err(|error| match error {
+                    FontFamilyCaptureError::Unavailable => FontPolicyCaptureError::Unsupported,
+                })?;
+            snapshot.bytes = bytes;
+            snapshot
+                .primary_families
+                .insert(family.to_owned(), inherited);
+        }
         for &(family, ch, weight, italic, size, fontset) in requests {
             if ch.is_ascii() {
                 continue;
@@ -199,6 +266,16 @@ impl FrozenCharacterPolicies {
             // Conservatively reserve a second request-family spelling for its
             // transient native-query materialization at resolution time.
             .checked_add(family.len().checked_mul(2)?)
+    }
+
+    fn primary_family_bytes(family: &str) -> Option<usize> {
+        std::mem::size_of::<String>()
+            .checked_add(std::mem::size_of::<FrozenFontFamilies>())?
+            .checked_add(family.len())
+    }
+
+    pub(super) fn primary_family(&self, family: &str) -> Option<&FrozenFontFamilies> {
+        self.primary_families.get(family)
     }
 
     pub(crate) fn bytes(&self) -> usize {

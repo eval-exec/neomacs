@@ -1037,11 +1037,55 @@ impl FontResolver {
         width: FontWidth,
         size: FontSelectionSize,
     ) -> Option<PlatformFontMatch> {
-        let families = FontFamilySource::Face(family).capture();
+        let (families, _generation) = self.capture_face_family_policy(family)?;
         self.resolve_face_policy(&families, foundry, weight, slant, width, size)
     }
 
-    fn resolve_face_policy(
+    /// Capture a face family's alternative search policy together with its
+    /// governing font-selection generation. On a background layout worker
+    /// (`worker_policy.is_some()`), reads strictly from the evaluator-captured
+    /// `FrozenCharacterPolicies::primary_families` without touching live
+    /// `ALTERNATIVE_FONT_FAMILY_ALIST`. On the evaluator thread, reads both
+    /// the family list and generation atomically under the alist read lock.
+    pub(crate) fn capture_face_family_policy(
+        &self,
+        family: &str,
+    ) -> Option<(CapturedFontFamilyPolicy, u64)> {
+        if let Some(worker) = &self.worker_policy {
+            let generation = worker.policies.generation.get();
+            if family.is_empty() {
+                return Some((
+                    CapturedFontFamilyPolicy::Inherited(std::iter::empty().collect()),
+                    generation,
+                ));
+            }
+            if let Some(inherited) = worker.policies.primary_family(family) {
+                return Some((
+                    CapturedFontFamilyPolicy::Inherited(inherited.clone()),
+                    generation,
+                ));
+            }
+            worker.mark_missing();
+            return None;
+        }
+        if family.is_empty() {
+            return Some((
+                CapturedFontFamilyPolicy::Inherited(std::iter::empty().collect()),
+                neovm_core::emacs_core::fontset::fontset_generation(),
+            ));
+        }
+        let (families, generation) =
+            neovm_core::emacs_core::font::capture_alternative_font_families_with_generation(family)
+                .unwrap_or_else(|_| {
+                    (
+                        std::iter::once(family.to_owned()).collect(),
+                        neovm_core::emacs_core::fontset::fontset_generation(),
+                    )
+                });
+        Some((CapturedFontFamilyPolicy::Inherited(families), generation))
+    }
+
+    pub(crate) fn resolve_face_policy(
         &self,
         families: &CapturedFontFamilyPolicy,
         foundry: Option<&str>,

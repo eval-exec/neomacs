@@ -784,6 +784,20 @@ pub struct Face {
         deserialize_with = "deserialize_tty_space_identity"
     )]
     pub tty_space_identity: TtySpaceIdentity,
+
+    /// GNU face `:foundry` attribute (e.g. `"SRC"`, `"PfEd"`), inherited from
+    /// `default` when unspecified so layout and `(face-font)` agree on
+    /// `font_find_for_lface` foundry fallback.
+    #[serde(default)]
+    pub font_foundry: Option<FaceString>,
+
+    /// GNU numeric slant (`0..=200`). `None` derives italic/normal from `attributes`.
+    #[serde(default)]
+    pub font_slant: Option<u16>,
+
+    /// GNU numeric width (`50..=200`). `None` means normal (`100`).
+    #[serde(default)]
+    pub font_width: Option<u16>,
 }
 
 impl Default for Face {
@@ -823,6 +837,9 @@ impl Default for Face {
             default_resolved_font_id: None,
             stipple: None,
             underline_placement: UnderlinePosition::default(),
+            font_foundry: None,
+            font_slant: None,
+            font_width: None,
         }
     }
 }
@@ -1069,6 +1086,9 @@ impl FaceDataFFI {
             // The legacy FFI face path does not carry a realized stipple; the
             // typed layout-engine path (`render_face`) is the only producer.
             stipple: None,
+            font_foundry: None,
+            font_slant: None,
+            font_width: None,
         }
     }
 }

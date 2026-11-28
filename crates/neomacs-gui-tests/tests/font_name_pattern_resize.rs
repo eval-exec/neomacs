@@ -32,13 +32,95 @@ fn face_font_fallback_xlfd_resize_matches_gnu_on_x11() {
     let gnu = run_fallback_resize(Engine::Gnu);
     let neo = run_fallback_resize(Engine::Neomacs);
     assert_eq!(
-        neo, gnu,
-        "Neomacs face-font fallback resize diverged from GNU 31.1"
+        neo["startup-dumped-faces-present"], true,
+        "dumped non-bootstrap faces must survive startup rehydration: {neo}"
+    );
+    assert_eq!(
+        gnu["startup-dumped-faces-present"], true,
+        "GNU control must have dumped non-bootstrap faces: {gnu}"
+    );
+    assert_eq!(
+        neo["startup-face-count"], gnu["startup-face-count"],
+        "stock -Q face-list count must match GNU before alist mutation: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["startup-completions-id"], gnu["startup-completions-id"],
+        "stock -Q completions-common-part face-id must match GNU: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["startup-help-key-id"], gnu["startup-help-key-id"],
+        "stock -Q help-key-binding face-id must match GNU: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["before-alist-face-count"], gnu["before-alist-face-count"],
+        "face-list count after loading dynamic faces must match GNU: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["after-alist-face-count"], neo["before-alist-face-count"],
+        "internal-set-alternative-font-family-alist must preserve dynamic face-list count: {neo}"
+    );
+    assert_eq!(
+        neo["after-alist-face-count"], gnu["after-alist-face-count"],
+        "face-list count after internal-set-alternative-font-family-alist must match GNU: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["before-alist-ansi-red-id"], gnu["before-alist-ansi-red-id"],
+        "dynamic ansi-color-red face-id must match GNU: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["after-alist-ansi-red-id"], neo["before-alist-ansi-red-id"],
+        "internal-set-alternative-font-family-alist must preserve dynamic ansi-color-red face-id: {neo}"
+    );
+    assert_eq!(
+        neo["after-alist-ansi-red-listed"], true,
+        "internal-set-alternative-font-family-alist must keep ansi-color-red in face-list: {neo}"
+    );
+    // In this isolated two-font Fontconfig catalog neither Hack nor DejaVu Sans
+    // Mono is in stock `face-font-family-alternatives` for "Monospace Serif":
+    // GNU's legacy X11 core xfont driver can still match bitmap `fixed`, while
+    // Neomacs resolves via Fontconfig to Hack. Both must return a real XLFD
+    // (never leaking "Monospace Serif") that resizes cleanly through
+    // `x-resolve-font-name`.
+    let startup_fps = neo["startup-fps"]
+        .as_str()
+        .expect("stock -Q fixed-pitch-serif face-font must be a string");
+    assert!(
+        !startup_fps.is_empty() && !startup_fps.contains("Monospace Serif"),
+        "stock -Q fixed-pitch-serif must not leak unmapped family name: {neo}"
+    );
+    let startup_fps_resolved = neo["startup-fps-resolved"]
+        .as_str()
+        .expect("stock -Q resized fixed-pitch-serif XLFD must resolve");
+    assert!(
+        startup_fps_resolved.contains("-13-"),
+        "stock -Q resized fixed-pitch-serif XLFD must reflect requested pixel size 13: {neo}"
+    );
+    assert_eq!(
+        neo["faces"], gnu["faces"],
+        "Neomacs face-font fallback resize diverged from GNU 31.1: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["direct-missing-resolve"], gnu["direct-missing-resolve"],
+        "direct missing-family x-resolve-font-name must match GNU: neo={neo} gnu={gnu}"
+    );
+    assert_eq!(
+        neo["direct-missing-set-frame"], gnu["direct-missing-set-frame"],
+        "direct missing-family set-frame-font must match GNU: neo={neo} gnu={gnu}"
     );
     assert_eq!(
         neo["faces"]["fixed-pitch-serif"]["face-font"],
         "-PfEd-DejaVu Sans Mono-regular-normal-normal-*-14-*-*-*-m-0-iso10646-1",
         "fixed-pitch-serif must resolve through face-font-family-alternatives: {neo}"
+    );
+    assert_eq!(
+        neo["faces"]["fixed-pitch-serif"]["resolved-13"],
+        "-PfEd-DejaVu Sans Mono-regular-normal-normal-*-13-*-*-*-m-0-iso10646-1",
+        "fixed-pitch-serif must resize to pixel size 13: {neo}"
+    );
+    assert_eq!(
+        neo["faces"]["fixed-pitch-serif"]["resolved-21"],
+        "-PfEd-DejaVu Sans Mono-regular-normal-normal-*-21-*-*-*-m-0-iso10646-1",
+        "fixed-pitch-serif must resize to pixel size 21: {neo}"
     );
     assert_eq!(
         neo["faces"]["neo-672-missing-face"]["face-font"],

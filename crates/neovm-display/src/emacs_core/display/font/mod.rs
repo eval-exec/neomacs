@@ -273,6 +273,23 @@ pub fn capture_alternative_font_families(
     Ok(state.capture(family))
 }
 
+/// Atomically capture a face family's alternative list together with the
+/// font-selection generation that governs it. Because
+/// `replace_alternative_font_family_alist` holds the exclusive write lock while
+/// updating the table and bumping `fontset_generation`, holding the read lock
+/// across both reads prevents TOCTOU cache-key skew.
+pub fn capture_alternative_font_families_with_generation(
+    family: &str,
+) -> Result<(FrozenFontFamilies, u64), FontFamilyCaptureError> {
+    let state = alternative_font_family_alist()
+        .read()
+        .map_err(|_| FontFamilyCaptureError::Unavailable)?;
+    Ok((
+        state.capture(family),
+        crate::emacs_core::fontset::fontset_generation(),
+    ))
+}
+
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 fn alternative_font_registry_alist_snapshot_for_test() -> Vec<(

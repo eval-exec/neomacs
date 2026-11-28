@@ -1635,6 +1635,9 @@ impl FrameGlyphBuffer {
             default_resolved_font_id: None,
             stipple: None,
             underline_placement: crate::face::UnderlinePosition::default(),
+            font_foundry: None,
+            font_slant: None,
+            font_width: None,
         }
     }
 
