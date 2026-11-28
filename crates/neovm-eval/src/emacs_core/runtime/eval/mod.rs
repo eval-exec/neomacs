@@ -5389,14 +5389,6 @@ impl Context {
         }
     }
 
-    /// Reset transient evaluator state at a completed top-level boundary.
-    ///
-    /// GNU reaches interactive/runtime boundaries by unwinding dynamic state
-    /// back to the top level, not by discarding the binding stack.  NeoVM's
-    /// source bootstrap can transiently accumulate bindings, lexical
-    /// environments, and catch state while loading `loadup.el` and early
-    /// startup Lisp, but those structures must be unwound before the
-    /// evaluator is reused.
     /// True when the evaluator's OS process wait backend (`polling::Poller`)
     /// has already been initialized. Pre-fork zygote parents assert this is
     /// `false` right before `fork()` so forked children never share one poller.
@@ -5405,6 +5397,14 @@ impl Context {
         self.processes.has_wait_backend()
     }
 
+    /// Reset transient evaluator state at a completed top-level boundary.
+    ///
+    /// GNU reaches interactive/runtime boundaries by unwinding dynamic state
+    /// back to the top level, not by discarding the binding stack.  NeoVM's
+    /// source bootstrap can transiently accumulate bindings, lexical
+    /// environments, and catch state while loading `loadup.el` and early
+    /// startup Lisp, but those structures must be unwound before the
+    /// evaluator is reused.
     #[doc(hidden)]
     pub fn clear_top_level_eval_state(&mut self) {
         self.unbind_to(0);
