@@ -292,12 +292,17 @@ impl ObservationWorld {
                 // A changed dump span discards negative protocol refinements,
                 // as the old thread-local envelope did. Same-span round trips
                 // retain valid refinements, including Off/Observed toggles.
-                // Keep positive dependencies and open captures with their
-                // World, so a temporary switch and return preserves them.
-                if previous_dump != dump
-                    && let Some(cold) = self.0.cold.get()
-                {
-                    cold.borrow_mut().observed.discard_exclusions();
+                // Always invalidate the arriving World's working-set cache on
+                // a World switch (cold path, one store) so cache-vs-dump-span
+                // soundness is enforced locally without relying on callers to
+                // have refreshed externally.
+                if let Some(cold) = self.0.cold.get() {
+                    let mut cold = cold.borrow_mut();
+                    if previous_dump != dump {
+                        cold.observed.discard_exclusions();
+                    } else {
+                        cold.observed.invalidate_published_cache();
+                    }
                 }
                 *slot.owner.borrow_mut() = self.clone();
                 slot.store.set(self.root());
@@ -416,6 +421,32 @@ pub(super) fn with_state<R>(f: impl FnOnce(&RefCell<State>) -> R) -> R {
     ObservationWorld::current().with_state(f)
 }
 
+/// Single-TLS-lookup fast path for `observe_new_owner`: registers the recent
+/// miss in `recent_dirty`, reads the current store revision, and borrows the
+/// active World's cold `State` without cloning/dropping `Rc<WorldObservations>`.
+///
+/// The closure must never switch Worlds (`ObservationWorld::install` /
+/// `swap_carried`) or invoke Lisp callbacks while `slot.owner` is borrowed.
+#[inline]
+pub(super) fn with_current_state_and_miss<R>(
+    bits: usize,
+    f: impl FnOnce(&RefCell<State>, LispCollectionRevision) -> R,
+) -> R {
+    STATE.with(|slot| {
+        if bits != 0 {
+            let index = ((bits >> 3) ^ (bits >> 11)) & 255;
+            let mask = &slot.recent_dirty[index / 64];
+            mask.set(mask.get() | (1 << (index % 64)));
+        }
+        // SAFETY: `slot.owner` retains the store allocation across this
+        // synchronous, non-switching observation step.
+        let revision =
+            LispCollectionRevision::from_sequence(unsafe { slot.store.get().as_ref() }.sequence());
+        let owner = slot.owner.borrow();
+        owner.with_state(|state| f(state, revision))
+    })
+}
+
 pub(crate) fn current_store_root() -> NonNull<StoreState> {
     STATE.with(|slot| slot.store.get())
 }
@@ -450,10 +481,29 @@ pub(super) fn refresh_membership() {
         let current = slot.owner.borrow();
         let mut suspended = slot.suspended.borrow_mut();
         suspended.retain(|owner| !Rc::ptr_eq(&owner.0, &current.0) && owner.has_captures());
-        let active = current.has_captures() || !suspended.is_empty();
-        current.observe_scopes(active);
+        let active = if !suspended.is_empty() {
+            ActiveFlag::ActiveWithSuspended
+        } else if current.has_captures() {
+            ActiveFlag::Active
+        } else {
+            ActiveFlag::Inactive
+        };
+        current.observe_scopes(active != ActiveFlag::Inactive);
         ACTIVE.with(|membership| membership.set(active));
     });
+}
+
+#[cfg(test)]
+static FOREIGN_REJECT_EMPTY_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn reset_foreign_reject_empty_calls_for_test() {
+    FOREIGN_REJECT_EMPTY_CALLS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(super) fn foreign_reject_empty_calls_for_test() -> usize {
+    FOREIGN_REJECT_EMPTY_CALLS.load(Ordering::Relaxed)
 }
 
 /// The current World's dependency map cannot describe a different World's
@@ -463,7 +513,12 @@ pub(super) fn refresh_membership() {
 #[inline(never)]
 pub(super) fn reject_foreign_capture_reads() {
     STATE.with(|slot| {
-        for owner in slot.suspended.borrow().iter() {
+        let suspended = slot.suspended.borrow();
+        #[cfg(test)]
+        if suspended.is_empty() {
+            FOREIGN_REJECT_EMPTY_CALLS.fetch_add(1, Ordering::Relaxed);
+        }
+        for owner in suspended.iter() {
             if let Some(cold) = owner.0.cold.get() {
                 for capture in &mut cold.borrow_mut().captures {
                     capture.overflow = true;

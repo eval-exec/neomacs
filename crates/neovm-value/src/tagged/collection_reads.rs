@@ -120,7 +120,7 @@ pub(crate) fn with_cold_state_held<R>(body: impl FnOnce() -> R) -> R {
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn capture_active_for_test() -> bool {
-    ACTIVE.with(Cell::get)
+    ACTIVE.with(Cell::get) != ActiveFlag::Inactive
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -175,13 +175,15 @@ pub fn reads_need_observation() -> bool {
     if policy == 0 {
         return false;
     }
-    policy & ReadPolicyBit::ObservedTraversal as usize != 0 || ACTIVE.with(Cell::get)
+    policy & ReadPolicyBit::ObservedTraversal as usize != 0
+        || ACTIVE.with(Cell::get) != ActiveFlag::Inactive
 }
 
 #[inline]
 #[doc(hidden)]
 pub fn is_active() -> bool {
-    CAPTURE_SCOPES.load(Ordering::Relaxed) & !POLICY_MASK != 0 && ACTIVE.with(Cell::get)
+    CAPTURE_SCOPES.load(Ordering::Relaxed) & !POLICY_MASK != 0
+        && ACTIVE.with(Cell::get) != ActiveFlag::Inactive
 }
 
 #[inline]
@@ -193,8 +195,25 @@ const JOURNAL_SIZE: usize = 8192;
 const MAX_READS: usize = 16_384;
 const MAX_DEPTH: usize = 8;
 
+/// Private mutator-local observation state mirrored in `ACTIVE`. Same 1-byte
+/// size and alignment as `bool`; distinguishes ordinary active captures from
+/// states with suspended foreign-World captures so `observe_active` skips
+/// `reject_foreign_capture_reads` unless a foreign capture is actually pending.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum ActiveFlag {
+    Inactive = 0,
+    Active = 1,
+    ActiveWithSuspended = 2,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ActiveFlag>() == std::mem::size_of::<bool>());
+    assert!(std::mem::align_of::<ActiveFlag>() == std::mem::align_of::<bool>());
+};
+
 thread_local! {
-    static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static ACTIVE: Cell<ActiveFlag> = const { Cell::new(ActiveFlag::Inactive) };
     #[cfg(any(debug_assertions, feature = "test-support"))]
     static FORBID_OBSERVED_READS: Cell<usize> = const { Cell::new(0) };
     static RECENT_READS: RecentReads = const { RecentReads::new() };
@@ -483,7 +502,7 @@ impl CollectionReads {
         if !self.owner.is_current() {
             return false;
         }
-        if ACTIVE.with(Cell::get) {
+        if ACTIVE.with(Cell::get) != ActiveFlag::Inactive {
             for &bits in self.reads.iter() {
                 // The original observation already published its sticky mark
                 // and this mutator's envelope. Certificates retain identities,
@@ -578,7 +597,11 @@ impl CollectionReadScope {
             });
             true
         });
-        ACTIVE.with(|active| active.set(true));
+        ACTIVE.with(|active| {
+            if active.get() == ActiveFlag::Inactive {
+                active.set(ActiveFlag::Active);
+            }
+        });
         if admitted {
             CAPTURE_SCOPES.fetch_add(SCOPE_INCREMENT, Ordering::Relaxed);
         }
@@ -664,7 +687,11 @@ impl CollectionReadScope {
             store.mutator.observe.set(active);
             if self.owner.is_current() {
                 clear_recent_reads();
-                ACTIVE.with(|membership| membership.set(active));
+                ACTIVE.with(|membership| {
+                    if !active && membership.get() == ActiveFlag::Active {
+                        membership.set(ActiveFlag::Inactive);
+                    }
+                });
             }
             CAPTURE_SCOPES.fetch_sub(SCOPE_INCREMENT, Ordering::Relaxed);
             capture
@@ -694,7 +721,7 @@ pub(crate) fn observe(value: TaggedValue) {
     // This private membership is read afresh for each pointer projection. A
     // different mutator cannot change it, and no state is cached across reads
     // or callbacks. begin/take restore it before running any user code.
-    if !ACTIVE.with(Cell::get) {
+    if ACTIVE.with(Cell::get) == ActiveFlag::Inactive {
         return;
     }
     if CAPTURE_SCOPES.load(Ordering::Relaxed) & !(ReadPolicyBit::ObservedTraversal as usize) == 0 {
@@ -714,10 +741,13 @@ pub(crate) fn observe(value: TaggedValue) {
 #[cold]
 #[inline(never)]
 unsafe fn observe_active(bits: usize) {
-    if !ACTIVE.with(Cell::get) {
+    let active = ACTIVE.with(Cell::get);
+    if active == ActiveFlag::Inactive {
         return;
     }
-    store_state::reject_foreign_capture_reads();
+    if active == ActiveFlag::ActiveWithSuspended {
+        store_state::reject_foreign_capture_reads();
+    }
     // SAFETY: caller upholds live-value contract for `bits`.
     unsafe { observe_bits(bits) };
 }
@@ -802,34 +832,66 @@ pub(super) fn reset_recent_reads_for_heap_installation() {
 #[cold]
 #[inline(never)]
 unsafe fn observe_new_owner(bits: usize) {
-    store_state::note_recent_miss(bits);
     // Misses acquire the shared epoch here, rather than on every cached read.
     // A real owner remains live while its pointer projection executes, even
     // if unrelated reclamation advances the global epoch concurrently.
     let publication_epoch = recent_publication_epoch();
-    with_state(|state| {
+    store_state::with_current_state_and_miss(bits, |state, revision| {
         let mut state = state.borrow_mut();
-        if let Some(epoch) = publication_epoch
-            && state.observed.was_refreshed_at(epoch)
-            && state.captures.last().is_some_and(|capture| {
-                !capture.overflow
-                    && capture.publication_epoch == Some(epoch)
-                    && capture.reads.contains_key(&bits)
-            })
-        {
-            // First insertion recorded every active outer scope too. Keep
-            // each scope's original revision; a subsequent write still makes
-            // the certificate incoherent. A new nested scope starts empty.
-            return;
+        if let Some(epoch) = publication_epoch {
+            if state.observed.is_published_in_cache(epoch, bits) {
+                debug_assert!(
+                    bits & super::value::TAG_MASK != super::value::TAG_VECLIKE
+                        || state.observed.has_slot_geometry(bits)
+                        || unsafe { native_window_collection_owner(bits) }
+                            != NativeWindowCollectionOwner::Slots,
+                    "PublishedCache hit for live VecLike bits={bits:#x} must not skip Slots geometry promotion"
+                );
+                if let Some((last, outer)) = state.captures.split_last_mut()
+                    && !last.overflow
+                    && last.publication_epoch == Some(epoch)
+                {
+                    match last.reads.insert_first_outcome(bits, revision) {
+                        capture_storage::InsertFirstOutcome::Existing => return,
+                        capture_storage::InsertFirstOutcome::Inserted => {}
+                        capture_storage::InsertFirstOutcome::Overflow => {
+                            last.overflow = true;
+                        }
+                    }
+                    #[cfg(any(test, feature = "test-support"))]
+                    OBSERVATION_STATE_ACCESSES.with(|count| count.set(count.get() + 1));
+                    for capture in outer {
+                        if capture.publication_epoch != Some(epoch) {
+                            capture.publication_epoch = None;
+                        }
+                        if capture.overflow {
+                            continue;
+                        }
+                        if !capture.reads.insert_first(bits, revision) {
+                            capture.overflow = true;
+                        }
+                    }
+                    return;
+                }
+                record_observation(&mut state, bits, revision, Some(epoch));
+                return;
+            }
+            if state.observed.was_refreshed_at(epoch)
+                && state.captures.last().is_some_and(|capture| {
+                    !capture.overflow
+                        && capture.publication_epoch == Some(epoch)
+                        && capture.reads.contains_key(&bits)
+                })
+            {
+                // First insertion recorded every active outer scope too. Keep
+                // each scope's original revision; a subsequent write still makes
+                // the certificate incoherent. A new nested scope starts empty.
+                return;
+            }
         }
         // SAFETY: caller upholds live-value contract for `bits`.
-        unsafe { publish_observed_owner_in_state(&mut state, bits) };
-        record_observation(
-            &mut state,
-            bits,
-            LispCollectionRevision::current(),
-            publication_epoch,
-        );
+        unsafe { publish_observed_owner_in_state_at_epoch(&mut state, bits, publication_epoch) };
+        record_observation(&mut state, bits, revision, publication_epoch);
     });
 }
 
@@ -837,7 +899,9 @@ unsafe fn observe_new_owner(bits: usize) {
 #[inline(never)]
 fn observe_uncached(bits: usize) {
     store_state::note_recent_miss(bits);
-    store_state::reject_foreign_capture_reads();
+    if ACTIVE.with(Cell::get) == ActiveFlag::ActiveWithSuspended {
+        store_state::reject_foreign_capture_reads();
+    }
     with_state(|state| {
         let mut state = state.borrow_mut();
         // A transitive cache hit must never dereference its old owner words.
@@ -845,7 +909,8 @@ fn observe_uncached(bits: usize) {
         refresh_observed_envelope(&mut state);
         let recent_epoch = recent_publication_epoch();
         let publication_epoch = recent_epoch.filter(|&epoch| {
-            state.observed.was_refreshed_at(epoch) && state.observed.already_published(bits)
+            state.observed.was_refreshed_at(epoch)
+                && state.observed.already_published_at_epoch(epoch, bits)
         });
         if recent_epoch.is_some() && publication_epoch.is_none() {
             // Off-mode certificates may contain an identity which was never
@@ -1029,14 +1094,14 @@ fn record_projected_write_observed(store: &StoreState, value: TaggedValue, proje
     if projected && !recent {
         store_state::note_recent_miss(value.bits());
     }
-    if projected {
+    if projected && ACTIVE.with(Cell::get) == ActiveFlag::ActiveWithSuspended {
         store_state::reject_foreign_capture_reads();
     }
     with_state(|state| {
         let mut state = state.borrow_mut();
         if projected && !recent {
             // SAFETY: `value` is a live projected `TaggedValue` owned by the mutator.
-            unsafe { publish_observed_owner_in_state(&mut state, value.bits()) };
+            unsafe { publish_observed_owner_in_state_at_epoch(&mut state, value.bits(), None) };
         }
         let revision = LispCollectionRevision::from_sequence(store.advance());
         store.record(value.bits(), revision.sequence());
@@ -1209,28 +1274,56 @@ fn refresh_observed_envelope(state: &mut State) {
     }
 }
 
+#[cfg(test)]
 #[cold]
 #[inline(never)]
 /// # Safety
 /// `bits` must encode a live `TaggedValue` whose header (if non-cons) remains
 /// valid and readable for the duration of this call.
 unsafe fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
+    // SAFETY: caller upholds live-value contract for `bits`.
+    unsafe { publish_observed_owner_in_state_at_epoch(state, bits, None) }
+}
+
+#[cold]
+#[inline(never)]
+/// # Safety
+/// `bits` must encode a live `TaggedValue` whose header (if non-cons) remains
+/// valid and readable for the duration of this call.
+unsafe fn publish_observed_owner_in_state_at_epoch(
+    state: &mut State,
+    bits: usize,
+    known_epoch: Option<u64>,
+) -> bool {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
         return false;
     }
+    let epoch = known_epoch.unwrap_or_else(super::gc::collection_observation_epoch);
     // Same-epoch membership proves sticky publication, but reclamation on
     // another mutator can reuse a veclike address and mark its new lifetime
     // before this ledger refreshes. Promote cached native eligibility only
     // from a real live projection; stale certificate replay never reads a
     // header. Positive slot eligibility may conservatively survive reuse.
     let tag = bits & super::value::TAG_MASK;
-    let promoted_geometry = if state.observed.already_published(bits) {
+    if state.observed.is_published_in_cache(epoch, bits) {
+        debug_assert!(
+            tag != super::value::TAG_VECLIKE
+                || state.observed.has_slot_geometry(bits)
+                || unsafe { native_window_collection_owner(bits) }
+                    != NativeWindowCollectionOwner::Slots,
+            "PublishedCache hit in publish_observed_owner_in_state_at_epoch for VecLike bits={bits:#x} must not skip Slots geometry promotion"
+        );
+        return false;
+    }
+    let promoted_geometry = if state.observed.already_published_at_epoch(epoch, bits) {
         if tag != super::value::TAG_VECLIKE || state.observed.has_slot_geometry(bits) {
+            state.observed.note_published_in_cache(epoch, bits);
             return false;
         }
         // SAFETY: caller upholds live-value contract for `bits`.
         let live_geometry = unsafe { native_window_collection_owner(bits) };
         if live_geometry != NativeWindowCollectionOwner::Slots {
+            state.observed.note_published_in_cache(epoch, bits);
             return false;
         }
         Some(live_geometry)
@@ -1266,6 +1359,9 @@ unsafe fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> boo
         };
         if refreshed || changed {
             super::gc::publish_collection_observation_window(state.observed.gate());
+        }
+        if let Some(current_epoch) = state.observed.current_epoch() {
+            state.observed.note_published_in_cache(current_epoch, bits);
         }
         newly
     } else if refreshed {
@@ -1439,11 +1535,15 @@ mod observed_reused_subtype_tests;
 #[path = "collection_reads/tests/observed_sweep_amortization_test.rs"]
 mod observed_sweep_amortization_tests;
 
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/observed_working_set_cache_test.rs"]
+mod observed_working_set_cache_tests;
+
 /// Carrier park: clear this thread's read-observation scope and recent-read
 /// cache. `STATE` is World-carried by the swap protocol and is not touched.
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
-    ACTIVE.with(|slot| slot.set(false));
+    ACTIVE.with(|slot| slot.set(ActiveFlag::Inactive));
     #[cfg(any(debug_assertions, feature = "test-support"))]
     FORBID_OBSERVED_READS.with(|slot| slot.set(0));
     // Epoch 0 is the fresh-thread value (`RecentReads::new`), so the snapshot

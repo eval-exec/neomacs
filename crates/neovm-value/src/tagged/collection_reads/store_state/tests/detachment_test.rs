@@ -412,7 +412,7 @@ fn pentry_e2b_observation_detach_clears_existing_recent_read_metadata() {
     note_recent_miss(bits);
     assert!(!recently_observed(bits));
     let receipt = detached(&mut collector);
-    assert!(!ACTIVE.with(Cell::get));
+    assert_eq!(ACTIVE.with(Cell::get), ActiveFlag::Inactive);
     RECENT_READS.with(|recent| assert!(recent.words.iter().all(|word| word.get() == 0)));
     collector.restore_source_observations(receipt).unwrap();
 }

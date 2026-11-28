@@ -112,7 +112,7 @@ fn nested_scope_budget_is_bounded_and_recovers() {
         assert!(reads.is_none());
     }
     nested(MAX_DEPTH + 5);
-    assert!(!ACTIVE.with(Cell::get));
+    assert_eq!(ACTIVE.with(Cell::get), ActiveFlag::Inactive);
     assert!(capture(|| ()).1.unwrap().unchanged());
 }
 
@@ -172,7 +172,7 @@ fn observation_budget_and_unwind_restore_the_outer_scope() {
     });
     assert!(reads.is_none());
     let _ = std::panic::catch_unwind(|| capture(|| panic!("unwind")));
-    assert!(!ACTIVE.with(Cell::get));
+    assert_eq!(ACTIVE.with(Cell::get), ActiveFlag::Inactive);
     let (_, reads) = capture(|| values[0].cons_car());
     assert!(reads.unwrap().unchanged());
 }

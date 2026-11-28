@@ -22,11 +22,81 @@ const EMPTY_BOUNDS: (usize, usize) = (usize::MAX, 0);
 // len / PRUNE_DEBT_RATIO real clears, and at most that many entries are dead.
 const PRUNE_DEBT_RATIO: u64 = 4;
 
+// Bounded L1/L2 working-set cache of owners already verified published (with
+// live metadata and complete native-window geometry) at a specific reclamation
+// epoch. Lives on the heap inside `ObservedEnvelope` (never in TLS).
+// 1,024 sets x 4 ways = 4,096 slots = 32 KiB (32 bytes = half a cache line per set).
+const PUBLISHED_CACHE_BITS: u32 = 10;
+const PUBLISHED_CACHE_SETS: usize = 1 << PUBLISHED_CACHE_BITS;
+const PUBLISHED_CACHE_WAYS: usize = 4;
+const PUBLISHED_CACHE_HASH_MULT: usize = 0x9e37_79b9_7f4a_7c15u64 as usize;
+
+struct PublishedCache {
+    epoch: u64,
+    valid: bool,
+    sets: Box<[[usize; PUBLISHED_CACHE_WAYS]]>,
+}
+
+impl PublishedCache {
+    fn new() -> Self {
+        Self {
+            epoch: 0,
+            valid: false,
+            sets: vec![[0usize; PUBLISHED_CACHE_WAYS]; PUBLISHED_CACHE_SETS].into_boxed_slice(),
+        }
+    }
+
+    #[inline(always)]
+    fn set_index(bits: usize) -> usize {
+        (bits.wrapping_mul(PUBLISHED_CACHE_HASH_MULT) >> (usize::BITS - PUBLISHED_CACHE_BITS))
+            & (PUBLISHED_CACHE_SETS - 1)
+    }
+
+    #[inline]
+    fn contains(&self, epoch: u64, bits: usize) -> bool {
+        if !self.valid || self.epoch != epoch || bits == 0 {
+            return false;
+        }
+        let set = &self.sets[Self::set_index(bits)];
+        set[0] == bits || set[1] == bits || set[2] == bits || set[3] == bits
+    }
+
+    #[inline]
+    fn insert(&mut self, epoch: u64, bits: usize) {
+        if bits == 0 {
+            return;
+        }
+        if !self.valid || self.epoch != epoch {
+            self.sets.fill([0; PUBLISHED_CACHE_WAYS]);
+            self.epoch = epoch;
+            self.valid = true;
+        }
+        let set = &mut self.sets[Self::set_index(bits)];
+        if set[0] == bits || set[1] == bits || set[2] == bits || set[3] == bits {
+            return;
+        }
+        set[3] = set[2];
+        set[2] = set[1];
+        set[1] = set[0];
+        set[0] = bits;
+    }
+
+    #[inline]
+    fn invalidate(&mut self) {
+        self.valid = false;
+    }
+}
+
 pub(super) struct ObservedEnvelope {
     // Complete lifetime publication ledger, including non-inline subtypes.
     // Between prunes it may also hold identities whose marks were cleared;
     // membership checks consult exact metadata before trusting an entry.
     owners: FxHashSet<usize>,
+    // Epoch-validated L1/L2 working-set cache of owners already confirmed
+    // present in `owners`, live in shared observation metadata, and
+    // geometry-complete at `epoch`. Invalidated in O(1) whenever
+    // `OBSERVATION_EPOCH` advances or the envelope is rebuilt.
+    published_cache: PublishedCache,
     // Cached native-store eligibility from live publication. A Buffer/Window/
     // Frame/Bytecode/String owner is still marked/replay-qualified in `owners`,
     // but cannot widen a native write gate or bound its empty intervals.
@@ -58,6 +128,8 @@ pub(super) struct ObservedEnvelope {
     geometry_rebuilds: usize,
     #[cfg(any(test, feature = "test-support"))]
     validated_identities: usize,
+    #[cfg(test)]
+    owners_set_probes: std::cell::Cell<usize>,
 }
 
 /// Frozen size of the envelope as it was when the thread-local `StateSlot`
@@ -131,11 +203,17 @@ impl ObservedEnvelope {
         self.excluded = None;
         self.excluded_cons = 0;
         self.single_cons = 0;
+        self.published_cache.invalidate();
+    }
+
+    pub(super) fn invalidate_published_cache(&mut self) {
+        self.published_cache.invalidate();
     }
 
     pub(super) fn new() -> Self {
         Self {
             owners: FxHashSet::default(),
+            published_cache: PublishedCache::new(),
             addresses: SortedAddressLedger::new(),
             slot_addresses: SortedAddressLedger::new(),
             epoch: Some(collection_observation_epoch()),
@@ -153,6 +231,8 @@ impl ObservedEnvelope {
             geometry_rebuilds: 0,
             #[cfg(any(test, feature = "test-support"))]
             validated_identities: 0,
+            #[cfg(test)]
+            owners_set_probes: std::cell::Cell::new(0),
         }
     }
 
@@ -243,6 +323,7 @@ impl ObservedEnvelope {
         let debt = reclaimed.wrapping_sub(self.validated_reclaimed);
         if debt.saturating_mul(PRUNE_DEBT_RATIO) < self.owners.len() as u64 {
             self.epoch = Some(epoch);
+            self.published_cache.invalidate();
             if self.dump != dump {
                 self.rebuild(dump);
                 return true;
@@ -264,6 +345,7 @@ impl ObservedEnvelope {
             .retain(|&bits| collection_observed_metadata(bits));
         self.validated_reclaimed = reclaimed;
         self.epoch = Some(epoch);
+        self.published_cache.invalidate();
         // Other heaps share the reclamation epoch. Keep the ordered buffers
         // and bounds when none of this ledger's identities died; an unrelated
         // sweep must not rebuild this ledger.
@@ -324,6 +406,40 @@ impl ObservedEnvelope {
         self.slot_addresses.contains(bits & !TAG_MASK)
     }
 
+    /// Fast working-set check: `bits` was already confirmed published, live in
+    /// shared observation metadata, and geometry-complete at `epoch`.
+    #[inline]
+    pub(super) fn is_published_in_cache(&self, epoch: u64, bits: usize) -> bool {
+        if self.epoch == Some(epoch) && self.published_cache.contains(epoch, bits) {
+            debug_assert!(
+                self.owners.contains(&bits) && collection_observed_metadata(bits),
+                "PublishedCache hit for bits={bits:#x} at epoch={epoch} must match owners ledger and live observation metadata"
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Record a live owner in the epoch-validated working-set cache after the
+    /// caller has confirmed local ledger membership, live sticky mark metadata,
+    /// and complete native-window geometry at `epoch`.
+    #[inline]
+    pub(super) fn note_published_in_cache(&mut self, epoch: u64, bits: usize) {
+        if self.epoch == Some(epoch) {
+            debug_assert!(
+                self.owners.contains(&bits) && collection_observed_metadata(bits),
+                "note_published_in_cache for bits={bits:#x} at epoch={epoch} requires owners membership and live observation metadata"
+            );
+            self.published_cache.insert(epoch, bits);
+        }
+    }
+
+    #[inline]
+    pub(super) fn current_epoch(&self) -> Option<u64> {
+        self.epoch
+    }
+
     /// A completed local publication remains valid throughout a stable
     /// reclamation epoch. The ledger is changed only under State's exclusive
     /// borrow, and its insertion/mark/gate publication contains no Lisp call
@@ -331,10 +447,25 @@ impl ObservedEnvelope {
     /// Shared marks clear only on death, followed by Release epoch advancement
     /// before reuse/resumption; this Acquire check rejects every such change.
     #[inline]
+    pub(super) fn already_published_at_epoch(&self, epoch: u64, bits: usize) -> bool {
+        if self.epoch != Some(epoch) {
+            return false;
+        }
+        if self.published_cache.contains(epoch, bits) {
+            debug_assert!(
+                self.owners.contains(&bits) && collection_observed_metadata(bits),
+                "PublishedCache hit in already_published_at_epoch for bits={bits:#x} at epoch={epoch} must match owners ledger and live observation metadata"
+            );
+            return true;
+        }
+        #[cfg(test)]
+        self.owners_set_probes.set(self.owners_set_probes.get() + 1);
+        self.owners.contains(&bits) && collection_observed_metadata(bits)
+    }
+
+    #[inline]
     pub(super) fn already_published(&self, bits: usize) -> bool {
-        self.epoch == Some(collection_observation_epoch())
-            && self.owners.contains(&bits)
-            && collection_observed_metadata(bits)
+        self.already_published_at_epoch(collection_observation_epoch(), bits)
     }
 
     /// Compare with an epoch already acquired by the current pointer read.
@@ -370,6 +501,16 @@ impl ObservedEnvelope {
     #[cfg(test)]
     pub(super) fn validated_reclaimed_for_test(&self) -> u64 {
         self.validated_reclaimed
+    }
+
+    #[cfg(test)]
+    pub(super) fn owners_set_probes_for_test(&self) -> usize {
+        self.owners_set_probes.get()
+    }
+
+    #[cfg(test)]
+    pub(super) fn reset_owners_set_probes_for_test(&self) {
+        self.owners_set_probes.set(0);
     }
 
     pub(super) fn ranges(&self) -> [BarrierWindow; 2] {
@@ -451,6 +592,7 @@ impl ObservedEnvelope {
     #[cold]
     #[inline(never)]
     fn rebuild(&mut self, dump: BarrierWindow) {
+        self.published_cache.invalidate();
         #[cfg(any(test, feature = "test-support"))]
         {
             self.geometry_rebuilds += 1;

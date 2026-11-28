@@ -149,7 +149,7 @@ impl ObservationWorld {
             exclusive_refs(self, RefOwners::HeapAndTls)?;
             let departing = std::mem::replace(&mut *owner, arriving);
             slot.store.set(placeholder.root());
-            ACTIVE.with(|active| active.set(false));
+            ACTIVE.with(|active| active.set(ActiveFlag::Inactive));
             Ok(departing)
         })?;
         // No original Rc destructor runs under any TLS or cold-data guard.
@@ -276,7 +276,7 @@ impl SourceObservationsDetached {
         let departing = self.with_interval(heap, canonical, |slot, owner| {
             let departing = std::mem::replace(owner, canonical.clone());
             slot.store.set(canonical.root());
-            ACTIVE.with(|active| active.set(false));
+            ACTIVE.with(|active| active.set(ActiveFlag::Inactive));
             departing
         })?;
         drop(departing);
