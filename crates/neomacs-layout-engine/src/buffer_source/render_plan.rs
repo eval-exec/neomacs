@@ -983,6 +983,7 @@ impl BufferSourceOutputSetup {
             self.body_install_context.display_text_row_base(),
             self.row_visibility_limit.max_rows,
         )
+        .with_row_visibility_limit(self.row_visibility_limit)
         .with_continuation_row_prelude(row_prelude_context, params);
         let loop_context = BufferSourceLoopRequestContext::new(
             buffer_id,

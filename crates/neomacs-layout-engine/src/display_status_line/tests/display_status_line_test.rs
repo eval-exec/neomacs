@@ -1470,3 +1470,91 @@ fn display_row_face_preserves_explicit_black_box_color() {
         "pixel value zero is a valid explicit black color, not an absence sentinel",
     );
 }
+
+#[test]
+fn tab_bar_row_height_includes_positive_box_line_width_of_inner_tab_span() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let table = FaceTable::new();
+    let resolver = FaceResolver::new(&table, 0x000000, 0xffffff, 14.0, Some("neo".to_string()));
+    let mut base_face = window_chrome_test_face(&resolver, &DisplayOrigin::TabBar);
+    base_face.box_type = 0;
+    base_face.box_line_width = 0.into();
+
+    let mut fonts = Some(crate::font::metrics::test_catalog::metrics_service());
+    let fallback = DisplayRowFallbackMetrics::from_default_face_extents(8.0, 17.0, 13.0);
+    let base_metrics =
+        DisplayRowFaceRealizer::new(&mut fonts).row_metrics_for_face(&base_face, fallback);
+    let unboxed_height = base_metrics.row_height();
+
+    let measure_tab = |eval: &mut neovm_core::emacs_core::Context,
+                       fonts: &mut Option<crate::font::metrics::FontMetricsService>,
+                       lisp_expr: &str|
+     -> (f32, f32) {
+        let text = eval.eval_str(lisp_expr).expect("tab bar string");
+        let mut faces = FrameFaceAttempt::for_test_with_next_id(1);
+        let mut services = ChromeRowRenderServices::new(
+            fonts,
+            &resolver,
+            &mut faces,
+            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        );
+        let measured = FrameTabBarDisplayRowRequest {
+            row_index: 0,
+            y: 0.0,
+            width: 320.0,
+            height: unboxed_height,
+            metrics: base_metrics,
+            base_face: &base_face,
+            text,
+            image_scale_environment: Default::default(),
+        }
+        .into_chrome_render_request(services.face_ids())
+        .render_row(&mut services, None)
+        .expect("measured tab bar row")
+        .measure();
+        (
+            measured.bounds().height,
+            measured.rendered().row().ascent_px,
+        )
+    };
+
+    let (plain_h, plain_ascent) = measure_tab(&mut eval, &mut fonts, r#"" *scratch* ""#);
+    assert_eq!(plain_h, unboxed_height);
+
+    // GNU IT_APPLY_FACE_BOX (src/xdisp.c:33565-33575): positive :box :line-width N
+    // on an inner span face (like `tab-bar-tab`) expands both ascent and descent
+    // by N, adding 2*N to the row height even though the base `tab-bar` face has
+    // no box.
+    let (box1_h, box1_ascent) = measure_tab(
+        &mut eval,
+        &mut fonts,
+        r#"(propertize " *scratch* " 'face '(:box (:line-width 1 :style released-button)))"#,
+    );
+    assert_eq!(
+        box1_h,
+        plain_h + 2.0,
+        "positive :box (:line-width 1) on an inner tab span must add 2 px to row height"
+    );
+    assert_eq!(
+        box1_ascent,
+        plain_ascent + 1.0,
+        "positive :box (:line-width 1) must shift row ascent down by 1 px"
+    );
+
+    let (box2_h, box2_ascent) = measure_tab(
+        &mut eval,
+        &mut fonts,
+        r#"(propertize " *scratch* " 'face '(:box (:line-width 2 :style released-button)))"#,
+    );
+    assert_eq!(box2_h, plain_h + 4.0);
+    assert_eq!(box2_ascent, plain_ascent + 2.0);
+
+    // Negative :line-width paints inside the glyph box and must not expand height.
+    let (neg_h, neg_ascent) = measure_tab(
+        &mut eval,
+        &mut fonts,
+        r#"(propertize " *scratch* " 'face '(:box (:line-width -2 :style released-button)))"#,
+    );
+    assert_eq!(neg_h, plain_h);
+    assert_eq!(neg_ascent, plain_ascent);
+}

@@ -379,6 +379,21 @@ pub(crate) fn stable_face_id_for_resolved(
     })
 }
 
+/// Per-edge vertical row expansion from a positive GNU `:box :line-width`,
+/// matching GNU `IT_APPLY_FACE_BOX` (`src/xdisp.c:33565-33575`): positive
+/// widths add `thick` to both ascent and descent (`+2 * thick` total height),
+/// while negative widths paint inside the glyph box (`0.0` expansion).
+fn positive_box_edge_px(face: &DisplayRowFace, device_scale: DeviceScale) -> f32 {
+    if face.box_type != BoxType::None {
+        face.box_line_width
+            .logical_geometry(device_scale)
+            .row_expansion_per_edge()
+            .get()
+    } else {
+        0.0
+    }
+}
+
 pub(crate) struct DisplayRowFaceRealizer<'a> {
     font_metrics: &'a mut Option<FontMetricsService>,
     device_scale: DeviceScale,
@@ -448,14 +463,7 @@ impl<'a> DisplayRowFaceRealizer<'a> {
             fallback.row_height(),
         );
         let line_height = face.metrics.line_height_px().ceil();
-        let box_edge = if face.box_type != BoxType::None {
-            face.box_line_width
-                .logical_geometry(self.device_scale)
-                .row_expansion_per_edge()
-                .get()
-        } else {
-            0.0
-        };
+        let box_edge = positive_box_edge_px(&face, self.device_scale);
         let row_height = (line_height + 2.0 * box_edge).max(1.0);
         DisplayRowFallbackMetrics::from_default_face_extents(
             face.metrics.char_width_px(fallback.char_width()),
@@ -750,14 +758,22 @@ impl DisplayGlyphMeasurer for DisplayRowGlyphMeasurer<'_> {
             return None;
         }
         let face = self.face(face_id)?;
+        let device_scale = self
+            .font_metrics
+            .as_deref()
+            .map(FontMetricsService::device_scale)
+            .unwrap_or(DeviceScale::ONE);
         let selection = realized_selection(self.font_metrics.as_deref(), face);
         let metrics = self
             .font_metrics
             .as_mut()?
             .vertical_metrics_for_realized_face_char(ch, selection)?;
-        let height = metrics.line_height;
-        (height > 0.0).then(|| {
-            crate::display_row::builder::DisplayRowVerticalMetrics::new(height, metrics.ascent)
+        (metrics.line_height > 0.0).then(|| {
+            let box_edge = positive_box_edge_px(face, device_scale);
+            crate::display_row::builder::DisplayRowVerticalMetrics::new(
+                metrics.line_height + 2.0 * box_edge,
+                metrics.ascent + box_edge,
+            )
         })
     }
 

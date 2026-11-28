@@ -19,7 +19,7 @@ use crate::display_row::builder::{DisplayRowGlyphSlot, DisplayRowPosition};
 use crate::display_row::face_state::{DisplayRowActiveFaceState, DisplayRowMeasurementMode};
 use crate::display_row::geometry::{
     DisplayRowFlags, DisplayRowGeometryDefaults, DisplayRowGeometryState, DisplayRowLimit,
-    DisplayRowYPositions, DisplayRowYRecording,
+    DisplayRowVisibilityLimit, DisplayRowYPositions, DisplayRowYRecording,
 };
 use crate::display_row::lisp_string::{
     LispStringSourceAppendRequest, LispStringSourceAppendSessionRequest, LispStringSourceId,
@@ -195,6 +195,7 @@ pub(crate) struct OverlayStringRenderRowContext<'a> {
     text_y: f32,
     pub(crate) row_base: usize,
     pub(crate) max_rows: usize,
+    row_visibility_limit: Option<DisplayRowVisibilityLimit>,
     row_transitions: OverlayStringRowTransitions,
 }
 
@@ -212,8 +213,17 @@ impl<'a> OverlayStringRenderRowContext<'a> {
             text_y,
             row_base,
             max_rows,
+            row_visibility_limit: None,
             row_transitions: OverlayStringRowTransitions::Allow,
         }
+    }
+
+    fn with_row_visibility_limit(
+        mut self,
+        row_visibility_limit: Option<DisplayRowVisibilityLimit>,
+    ) -> Self {
+        self.row_visibility_limit = row_visibility_limit;
+        self
     }
 
     fn with_row_transitions(mut self, policy: OverlayStringRowTransitions) -> Self {
@@ -415,6 +425,7 @@ pub(crate) struct BufferOverlayStringTextRowRenderContext<'a> {
     text_y: f32,
     row_base: usize,
     max_rows: usize,
+    row_visibility_limit: Option<DisplayRowVisibilityLimit>,
     continuation_row_prelude: Option<OverlayStringContinuationRowContext<'a>>,
     row_transitions: OverlayStringRowTransitions,
 }
@@ -437,9 +448,18 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             text_y,
             row_base,
             max_rows,
+            row_visibility_limit: None,
             continuation_row_prelude: None,
             row_transitions: OverlayStringRowTransitions::Allow,
         }
+    }
+
+    pub(crate) fn with_row_visibility_limit(
+        mut self,
+        row_visibility_limit: DisplayRowVisibilityLimit,
+    ) -> Self {
+        self.row_visibility_limit = Some(row_visibility_limit);
+        self
     }
 
     pub(crate) fn with_continuation_row_prelude(
@@ -482,6 +502,7 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
             self.row_base,
             self.max_rows,
         )
+        .with_row_visibility_limit(self.row_visibility_limit)
         .with_row_transitions(self.row_transitions)
     }
 
@@ -654,7 +675,11 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
     }
 
     pub(crate) fn should_render(self, row_geometry: &DisplayRowGeometryState) -> bool {
-        self.enabled && row_geometry.is_within_row_limit(self.row_context_row_limit())
+        self.enabled
+            && row_geometry.is_within_row_limit(self.row_context_row_limit())
+            && self
+                .row_visibility_limit
+                .is_none_or(|limit| row_geometry.current_row_is_visible(limit))
     }
 
     #[inline]
@@ -735,6 +760,13 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
         state
             .progress
             .apply_position(DisplayRowPosition::new(self.row_context.content_x(), 0));
+        if self
+            .row_context
+            .row_visibility_limit
+            .is_some_and(|limit| !state.geometry.current_row_is_visible(limit))
+        {
+            return DisplayRowTransitionContinuation::Hidden;
+        }
         state.render_continuation_row_prelude(buffer, self.anchor_charpos, properties);
         state.progress.record_row_text_start();
         DisplayRowTransitionContinuation::Continue
@@ -786,6 +818,13 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
                 state.progress.set_col(DisplayColumn::new(column));
                 context.face_scan.invalidate();
             }
+        }
+        if self
+            .row_context
+            .row_visibility_limit
+            .is_some_and(|limit| !state.geometry.current_row_is_visible(limit))
+        {
+            return DisplayRowTransitionContinuation::Hidden;
         }
         state.render_continuation_row_prelude(buffer, self.anchor_charpos, properties);
         state.progress.record_row_text_start();

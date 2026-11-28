@@ -563,7 +563,18 @@ pub fn start_xvfb_with_size(
     width: u32,
     height: u32,
 ) -> io::Result<DisplaySession> {
-    start_xvfb_with_transport(artifact_root, width, height, XTransport::Tcp)
+    start_xvfb_with_transport(artifact_root, width, height, None, XTransport::Tcp)
+}
+
+/// An isolated framebuffer with an explicit X server DPI (`Xvfb -dpi N`), e.g.
+/// `96` to match Wayland/PGTK logical font resolution (`src/pgtkterm.c:7233`).
+pub fn start_xvfb_with_dpi(
+    artifact_root: &Path,
+    width: u32,
+    height: u32,
+    dpi: u32,
+) -> io::Result<DisplaySession> {
+    start_xvfb_with_transport(artifact_root, width, height, Some(dpi), XTransport::Tcp)
 }
 
 /// An isolated framebuffer whose clients connect through Xvfb's local Unix
@@ -581,7 +592,7 @@ pub fn start_local_xvfb_with_size(
     width: u32,
     height: u32,
 ) -> io::Result<DisplaySession> {
-    start_xvfb_with_transport(artifact_root, width, height, XTransport::Local)
+    start_xvfb_with_transport(artifact_root, width, height, None, XTransport::Local)
 }
 
 // Select only the software ICD already named by the caller. This affects
@@ -646,6 +657,7 @@ fn start_xvfb_with_transport(
     artifact_root: &Path,
     width: u32,
     height: u32,
+    dpi: Option<u32>,
     transport: XTransport,
 ) -> io::Result<DisplaySession> {
     if width == 0 || height == 0 {
@@ -660,7 +672,7 @@ fn start_xvfb_with_transport(
     // A pid-derived display number collides when a previous server's lock is
     // still on that number (`Server is already active for display N`).
     // `-nolock` is ignored for non-root, so the server picks a free display.
-    start_xvfb_on(artifact_root, width, height, transport)
+    start_xvfb_on(artifact_root, width, height, dpi, transport)
 }
 
 /// Hung-server bound. A dead server is still reported on the next poll.
@@ -780,6 +792,7 @@ fn start_xvfb_on(
     artifact_root: &Path,
     width: u32,
     height: u32,
+    dpi: Option<u32>,
     transport: XTransport,
 ) -> io::Result<DisplaySession> {
     let nonce = SystemTime::now()
@@ -814,6 +827,9 @@ fn start_xvfb_on(
         .arg("-screen")
         .arg("0")
         .arg(format!("{width}x{height}x24"));
+    if let Some(dpi) = dpi {
+        xvfb.arg("-dpi").arg(dpi.to_string());
+    }
     match transport {
         XTransport::Tcp => {
             // `tcp` is an alias for IPv6 and IPv4. A failed IPv6 bind is retried
