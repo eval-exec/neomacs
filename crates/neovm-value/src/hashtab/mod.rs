@@ -94,6 +94,8 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
         HashKey::Window(id) => Value::make_window(*id),
         HashKey::Frame(id) => Value::make_frame(*id),
         HashKey::Ptr(_) => Value::NIL, // can't reconstruct from pointer
+        // A live-key marker has no reconstructible structure; its slot owns the key object.
+        HashKey::LiveKey => Value::NIL,
         HashKey::EqualCons(_, _) => {
             let mut cars = Vec::new();
             let mut node = key;
@@ -701,6 +703,14 @@ where
     let test = table.test;
     let mut buckets: Vec<Vec<(Value, i64)>> = vec![Vec::new(); bucket_count];
     for (key, entry) in table.data.keyed_entries_in_slot_order() {
+        let live;
+        let key = match key {
+            HashKey::LiveKey => {
+                live = entry.key.to_hash_key(&test);
+                &live
+            }
+            key => key,
+        };
         let hash = internal_hash_table_diagnostic_hash(key, test);
         let index = knuth_hash_index(hash, index_bits);
         buckets[index].push((entry.key, hash as i64));

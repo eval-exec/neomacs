@@ -189,6 +189,7 @@ mod global_local_keymap_semantics;
 mod goto_char;
 mod goto_char_advanced;
 mod hash;
+mod hash_table_equal_live_keys;
 mod hash_table_shared_dag;
 mod help_doc_semantics;
 mod history_semantics;
