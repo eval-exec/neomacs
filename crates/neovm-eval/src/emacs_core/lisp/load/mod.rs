@@ -5936,17 +5936,29 @@ fn finish_cached_bootstrap_eval_env(
     // bootstrap already created the startup buffers (`*scratch*`,
     // ` *Minibuf-0*`, `*Messages*`), update each of them so none retains
     // the zygote parent's working directory.
+    //
+    // GNU switches with `Fset_buffer` (`set_buffer_internal`) and writes the
+    // minibuffer's slot with `bset_directory` (`src/buffer.c:4939,4984`);
+    // neither calls `record_buffer`.  Switch unrecorded here too: the
+    // recording switch moves each buffer to the front of `buffer-list`, and a
+    // zygote child, whose startup buffers already exist, would then report
+    // `("*scratch*" "*Messages*" " *Minibuf-0*")` where GNU and a cold start
+    // report `("*scratch*" " *Minibuf-0*" "*Messages*")`.
     if let Ok(cwd) = std::env::current_dir() {
         let cwd_val = Value::unibyte_string(lisp_directory_name_from_host_path(&cwd));
         let original_buf = eval.buffer_manager().current_buffer_id();
         for name in ["*scratch*", " *Minibuf-0*", "*Messages*"] {
             if let Some(buf_id) = eval.buffer_manager().find_buffer_by_name(name) {
-                eval.buffer_manager_view_mut().set_current(buf_id);
+                let _ = eval
+                    .buffer_manager_view_mut()
+                    .switch_current_unrecorded(buf_id);
                 eval.set_variable("default-directory", cwd_val);
             }
         }
         if let Some(orig) = original_buf {
-            eval.buffer_manager_view_mut().set_current(orig);
+            let _ = eval
+                .buffer_manager_view_mut()
+                .switch_current_unrecorded(orig);
         }
         eval.set_variable("default-directory", cwd_val);
     }

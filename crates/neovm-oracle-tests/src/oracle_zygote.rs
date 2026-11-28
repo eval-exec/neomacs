@@ -1118,5 +1118,55 @@ mod unix_impl {
             let _ = server.kill();
             let _ = server.wait();
         }
+
+        #[test]
+        fn zygote_child_buffer_list_order_matches_cold_start() {
+            // The zygote parent runs `bootstrap_buffers` before `fork()`, so
+            // each child refreshes `default-directory` on startup buffers that
+            // already exist.  GNU's `init_buffer` does that without
+            // `record_buffer` (`src/buffer.c:4939,4984`), so the refresh must
+            // not reorder `buffer-list`: a forked child and a cold `--batch -Q`
+            // start of the same binary must agree.  GNU 31.1 prints
+            // ("*scratch*" " *Minibuf-0*" "*Messages*") for this form.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-order-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let parent_work = dir.path().join("parent-dir");
+            let cwd = dir.path().join("child-cwd");
+            for d in [&parent_work, &cwd] {
+                fs::create_dir_all(d).unwrap();
+            }
+            let form = r#"(princ (format "%S" (mapcar (function buffer-name) (buffer-list))))"#;
+
+            let mut cold = neomacs_test_env::CanonicalEnvironment::new(
+                neomacs_test_env::CanonicalProfile::Oracle,
+                dir.path(),
+                dir.path(),
+                dir.path(),
+            )
+            .expect("canonical env")
+            .command(&program);
+            cold.current_dir(&cwd);
+            cold.args(["--batch", "-Q", "--eval", form]);
+            let cold = cold.output().expect("cold neomacs run");
+            assert!(cold.status.success(), "cold run failed: {cold:?}");
+
+            let mut server = spawn_private_zygote(&program, &sock, &parent_work);
+            let forked =
+                run_direct_on_socket(&sock, &program, &cwd, dir.path(), "order", &[], form);
+            let _ = server.kill();
+            let _ = server.wait();
+            assert!(forked.status.success(), "zygote child failed: {forked:?}");
+
+            assert_eq!(
+                String::from_utf8_lossy(&forked.stdout),
+                String::from_utf8_lossy(&cold.stdout),
+                "zygote child buffer-list differs from a cold start"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&cold.stdout),
+                r#"("*scratch*" " *Minibuf-0*" "*Messages*")"#
+            );
+        }
     }
 }
