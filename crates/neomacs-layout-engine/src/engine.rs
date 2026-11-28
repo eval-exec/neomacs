@@ -8386,12 +8386,17 @@ impl LayoutEngine {
                 let reattempting_current_start =
                     !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
                         && resolved_start.get() == params.window_start;
-                let next_visibility_retries =
-                    if resolved_start == fallback_window_start || reattempting_current_start {
-                        0
-                    } else {
-                        remaining_visibility_retries.saturating_sub(1)
-                    };
+                // A fallback past this start is a measured scroll, as a
+                // `Commit` would be: it keeps the remaining budget.
+                let fallback_preserves_start = fallback_window_start.get() <= params.window_start;
+                let next_visibility_retries = if (resolved_start == fallback_window_start
+                    && fallback_preserves_start)
+                    || reattempting_current_start
+                {
+                    0
+                } else {
+                    remaining_visibility_retries.saturating_sub(1)
+                };
                 if evaluator.frame_manager().window_topology_generation() != topology_generation
                     || evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id)
                         != freshness_before_motion

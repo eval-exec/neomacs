@@ -39995,6 +39995,9 @@ mod overlay_string_word_wrap_progress_test;
 #[path = "divider_corner_review_test.rs"]
 mod divider_corner_review_test;
 
+#[path = "wrapped_line_recenter_test.rs"]
+mod wrapped_line_recenter_test;
+
 /// R1 (#702): a window-range overlay view must follow the span the walk
 /// consumes. Invisible overlays (magit-section/hideshow collapse) can make a
 /// window show text far past any fixed visible-char budget; the attempt that
