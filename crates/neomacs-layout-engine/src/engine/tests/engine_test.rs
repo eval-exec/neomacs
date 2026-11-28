@@ -8520,6 +8520,45 @@ fn layout_frame_rust_empty_display_vector_cursor_uses_following_special_glyph() 
 }
 
 #[test]
+fn layout_frame_rust_empty_display_vector_before_newline_keeps_cursor_on_its_row() {
+    // Issue #855: a CR hidden by an empty display-table entry, at the end of
+    // a "{\r\n" line.  GNU `set_cursor_from_row` looks for point's
+    // `glyph_after` only among the glyphs of the row that contains point
+    // (src/xdisp.c, Step 1), and that row ends with the newline's glyph, so
+    // the cursor stays on point's row at the newline (attested GNU 31.1:
+    // `window-cursor-info' x = one column, same y as `posn-at-point').  The
+    // first glyph of the next line must not take it.
+    for (text, newline_col) in [("{\r\nB\n", 1), ("ab\r\nB\n", 2)] {
+        let point_byte = text.find('\r').expect("CR in the case text");
+        let setup = move |buffer: &mut neovm_core::buffer::Buffer, _id: BufferId, _t: &str| {
+            let table = Value::make_char_table(Value::symbol("display-table"), Value::NIL, 6);
+            neovm_core::emacs_core::chartable::ct_set_single(
+                &table,
+                '\r' as i64,
+                Value::vector(vec![]),
+            );
+            buffer.set_buffer_local("buffer-display-table", table);
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(point_byte));
+        };
+        let trace = layout_trace_with_buffer_setup(text, 360, 180, setup);
+        let cursor = trace
+            .phys_cursor
+            .as_ref()
+            .expect("an empty vector at point must retain a cursor");
+        let point_row = trace
+            .points
+            .iter()
+            .find(|point| point.buffer_pos == LispCharPos1::from_one_based_usize(1))
+            .expect("display point for the first character")
+            .row;
+        assert_eq!(
+            (cursor.row, cursor.col),
+            (point_row, newline_col),
+            "{text:?}: the cursor must stay on point's row at the newline"
+        );
+    }
+}
+#[test]
 fn layout_frame_rust_display_table_decodes_cons_glyph_code() {
     // A glyph code can be a `(char . face-id)` cons (GNU `make-glyph-code` when
     // the face id needs more than 6 bits) as well as a packed fixnum.  Both

@@ -3212,13 +3212,28 @@ impl BufferSourceLineBreakSourceAction {
         x: f32,
         col: usize,
     ) {
-        if !target.is_missing() || !self.point_matches(point_charpos) {
+        let captures = if self.consumes_buffer_newline() {
+            // A buffer newline's glyph is the last glyph of point's row, so
+            // it is the `glyph_after' for point on an empty display vector
+            // earlier in that row: GNU `set_cursor_from_row' looks for it
+            // only among the row's own glyphs (src/xdisp.c, Step 1).
+            target.should_capture_visible_glyph_at(self.charpos, point_charpos)
+        } else {
+            target.is_missing() && self.point_matches(point_charpos)
+        };
+        if !captures {
             return;
         }
         capture_cursor_approximation(
             target,
             self.cursor_info(active_face_state, row_geometry, x, col),
         );
+    }
+
+    /// Whether this break is a buffer newline rather than one inside a
+    /// `display` string, which consumes no buffer character.
+    fn consumes_buffer_newline(self) -> bool {
+        self.next_charpos > self.charpos
     }
 }
 

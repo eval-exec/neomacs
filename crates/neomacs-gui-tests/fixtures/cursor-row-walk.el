@@ -44,6 +44,9 @@
       ('one-space " ")
       ;; A lone closing paren, as in the #855 reporter's workspace autosave.
       ('one-paren ")")
+      ;; "{" and a carriage return, as on a CRLF line of a file decoded as
+      ;; unix: the #855 reporter's point was on that CR (char 13, column 1).
+      ('hidden-cr "{\r")
       ('exact-width (make-string width ?x))
       ('width-minus-one (make-string (1- width) ?x))
       ('wrapped (make-string (+ width (/ width 2)) ?w))
@@ -105,7 +108,12 @@
                                          neo-row-walk-trailing-whitespace
                                          display-line-numbers-mode hl-line-mode
                                          neo-row-walk-tall-mode-line)
-                              middle))
+                              middle)
+    ;; #855 as the reporter met it: the CR displays as nothing, and an
+    ;; evil-style normal state moves point back off the newline onto it.
+    (mid-hidden-cr-evil hidden-cr (neo-row-walk-hide-cr neo-row-walk-evil-normal
+                                   display-line-numbers-mode hl-line-mode)
+                        middle))
   "(NAME LINE-99-SHAPE MODES [PLACEMENT]): one buffer per case.
 Each MODE is called with 1 in the case's buffer.  PLACEMENT `middle' puts
 line 98 in the middle of the window; otherwise it is on the last body row,
@@ -115,6 +123,18 @@ so the first C-n scrolls.")
   "Edit the case's buffer in `emacs-lisp-mode' with font-lock on."
   (emacs-lisp-mode)
   (font-lock-mode 1))
+
+(defun neo-row-walk-hide-cr (_arg)
+  "Display carriage returns as nothing, through an empty display-table entry."
+  (setq buffer-display-table (make-display-table))
+  (aset buffer-display-table ?\r []))
+
+(defvar-local neo-row-walk-evil-normal-p nil
+  "Non-nil when a C-n step must leave point off the newline.")
+
+(defun neo-row-walk-evil-normal (_arg)
+  "Model evil's normal state: point never rests on a non-empty line's newline."
+  (setq neo-row-walk-evil-normal-p t))
 
 (defun neo-row-walk-trailing-whitespace (_arg)
   "Show trailing whitespace in the case's buffer, as Doom does."
@@ -289,6 +309,10 @@ A failing move reports the motion state it failed from."
     (condition-case err
         (call-interactively #'next-line)
       (error (signal (car err) (append (cdr err) (list :from before))))))
+  ;; Evil's normal state moves point back one character from the end of a
+  ;; non-empty line (`evil-adjust-cursor').
+  (when (and neo-row-walk-evil-normal-p (eolp) (not (bolp)))
+    (backward-char 1))
   (setq last-command 'next-line))
 
 (defun neo-row-walk-cases (cases)
