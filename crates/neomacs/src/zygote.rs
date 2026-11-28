@@ -1,15 +1,21 @@
 //! Pre-booted batch `fork()` zygote server for fast, process-isolated runs.
 //!
 //! When launched with `--batch-zygote-socket=<path>`, Neomacs loads its final
-//! `pdump` image **once** in a strictly single-threaded parent process, then
-//! serves requests over a Unix domain socket by calling `libc::fork()`.
+//! `pdump` image **once** in a strictly single-threaded parent process, runs
+//! the pure env/cwd/FD-independent half of runtime activation
+//! (`preactivate_runtime_evaluator_for_fork`) and the fixed `80x24`
+//! noninteractive TTY bootstrap (`bootstrap_tty_batch_evaluator`) once before
+//! `fork()`, and then serves requests over a Unix domain socket via
+//! `libc::fork()`.
 //!
-//! Each forked child inherits the already-deserialized Lisp heap via OS
-//! Copy-on-Write, applies the request's `stdout`/`stderr` files, `cwd`,
-//! `umask`, OS environment, `RLIMIT_AS`, and `argv`, and then runs the exact
-//! unmodified post-image activation (`activate_runtime_evaluator`), startup
-//! setup (`bootstrap_buffers` + `configure_gnu_startup_state`), and GNU
-//! `recursive-edit` command loop before exiting via `libc::_exit`.
+//! Each forked child inherits the already-deserialized, pre-activated Lisp
+//! heap via OS Copy-on-Write, applies the request's `stdout`/`stderr` files,
+//! `cwd`, `umask`, OS environment, `RLIMIT_AS`, signal dispositions, and
+//! `argv`, completes per-child OS activation
+//! (`finish_forked_runtime_evaluator`: host env snapshot, identity,
+//! `default-directory`, `post_image_init`, and a fresh `ProcessWaitBackend`),
+//! and then runs `configure_gnu_startup_state` and GNU `recursive-edit` before
+//! exiting via `libc::_exit`.
 //!
 //! Works on both Linux and macOS (`#[cfg(unix)]`).
 
@@ -52,9 +58,9 @@ mod unix_impl {
     use neovm_core::emacs_core::load::RuntimeImageRole;
 
     use super::super::{
-        BOOTSTRAP_CORE_FEATURES, RuntimeMode, initialize_system_locale,
-        jemalloc_release_startup_slack, parse_startup_options, render_startup_image_error,
-        run_tty_batch_evaluator,
+        BOOTSTRAP_CORE_FEATURES, RuntimeMode, bootstrap_tty_batch_evaluator,
+        initialize_system_locale, jemalloc_release_startup_slack, parse_startup_options,
+        render_startup_image_error, run_tty_batch_evaluator_bootstrapped,
     };
 
     const WIRE_MAGIC: &[u8; 4] = b"NVZ2";
@@ -604,19 +610,30 @@ mod unix_impl {
             child_startup.noninteractive,
         );
 
-        if let Err(err) = neovm_core::emacs_core::load::activate_runtime_evaluator(
+        // The zygote parent already ran the pure pre-fork half with
+        // `no_site_lisp = true` and bootstrapped the 80x24 TTY frame/buffers.
+        // Finish only the per-child OS environment, identity, cwd,
+        // `post_image_init`, and `ProcessWaitBackend` activation here.
+        let recompute_load_path = !child_startup.no_site_lisp;
+        if let Err(err) = neovm_core::emacs_core::load::finish_forked_runtime_evaluator(
             &mut evaluator,
             RuntimeImageRole::Final,
+            recompute_load_path,
         ) {
             eprintln!(
-                "neomacs zygote: failed to activate final image: {}",
+                "neomacs zygote: failed to finish final image activation: {}",
                 render_startup_image_error(&err)
             );
             unsafe { libc::_exit(1) };
         }
 
-        let exit_code =
-            run_tty_batch_evaluator(evaluator, mode, &child_startup, started_at, &process_args);
+        let exit_code = run_tty_batch_evaluator_bootstrapped(
+            evaluator,
+            mode,
+            &child_startup,
+            started_at,
+            &process_args,
+        );
 
         let _ = io::stdout().flush();
         let _ = io::stderr().flush();
@@ -824,9 +841,16 @@ mod unix_impl {
                 .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS),
         );
 
-        // Load the final pdump image ONCE before binding the socket so any
-        // connecting client is guaranteed to hit a warm, ready zygote.
-        let evaluator =
+        // Preactivate with `no_site_lisp = true` (matching `-Q` batch runs);
+        // any child that omits `-Q`/`--no-site-lisp` or sets `EMACSLOADPATH`
+        // recomputes `load-path` in `finish_forked_runtime_evaluator`.
+        neovm_core::emacs_core::load::set_no_site_lisp(true);
+
+        // Load the final pdump image ONCE before binding the socket, then run
+        // the pure pre-fork half of runtime activation + TTY buffer bootstrap
+        // so every forked child inherits a warm heap via OS Copy-on-Write while
+        // keeping per-child env/cwd/FDs clean.
+        let mut evaluator =
             neovm_core::emacs_core::load_boot::load_unactivated_runtime_image_with_features(
                 RuntimeImageRole::Final,
                 BOOTSTRAP_CORE_FEATURES,
@@ -839,6 +863,21 @@ mod unix_impl {
                 );
                 std::process::exit(1);
             });
+        if let Err(err) = neovm_core::emacs_core::load::preactivate_runtime_evaluator_for_fork(
+            &mut evaluator,
+            RuntimeImageRole::Final,
+        ) {
+            eprintln!(
+                "neomacs zygote: failed to preactivate final image: {}",
+                render_startup_image_error(&err)
+            );
+            std::process::exit(1);
+        }
+        bootstrap_tty_batch_evaluator(&mut evaluator);
+        assert!(
+            !evaluator.has_process_wait_backend(),
+            "batch zygote must not materialize ProcessWaitBackend before fork()"
+        );
         jemalloc_release_startup_slack();
 
         assert_single_threaded_before_fork();

@@ -1031,5 +1031,92 @@ mod unix_impl {
             let _ = server.kill();
             let _ = server.wait();
         }
+
+        #[test]
+        fn zygote_refreshes_startup_buffers_cwd_and_emacsloadpath_per_child() {
+            // Regression test for the deeper pre-fork seam: the zygote parent
+            // pre-activates the image (`no_site_lisp=true`, no `EMACSLOADPATH`)
+            // and runs `bootstrap_buffers` once before `fork()`. Each forked
+            // child must still receive its own `default-directory` on all
+            // startup buffers (`*scratch*`, `*Messages*`, ` *Minibuf-0*`), its
+            // own `EMACSLOADPATH` prefix in `load-path`, and its own `exec-path`.
+            let program = PathBuf::from(crate::common::neomacs_binary_path());
+            let dir = bounded_temp_dir("nvz-preact-").expect("tempdir");
+            let sock = dir.path().join("z.sock");
+            let parent_work = dir.path().join("parent-dir");
+            let cwd_a = dir.path().join("child-cwd-a");
+            let cwd_b = dir.path().join("child-cwd-b");
+            let extra_lisp = dir.path().join("extra-lisp");
+            for d in [&parent_work, &cwd_a, &cwd_b, &extra_lisp] {
+                fs::create_dir_all(d).unwrap();
+            }
+
+            let mut server = spawn_private_zygote(&program, &sock, &parent_work);
+
+            let inspect_form = r#"(princ (format "%S"
+                (list
+                  (mapcar (lambda (name)
+                            (with-current-buffer name
+                              (file-name-nondirectory
+                                (directory-file-name default-directory))))
+                          '("*scratch*" "*Messages*" " *Minibuf-0*"))
+                  (car load-path)
+                  (getenv "USER"))))"#;
+
+            let out_a = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_a,
+                dir.path(),
+                "child-a",
+                &[
+                    ("EMACSLOADPATH", &format!("{}:", extra_lisp.display())),
+                    ("USER", "alice"),
+                ],
+                inspect_form,
+            );
+            assert!(out_a.status.success(), "child-a failed: {out_a:?}");
+            let s_a = String::from_utf8_lossy(&out_a.stdout);
+            assert!(
+                s_a.starts_with(r#"(("child-cwd-a" "child-cwd-a" "child-cwd-a") "#),
+                "startup buffers did not update default-directory for child-a: {s_a}"
+            );
+            assert!(
+                s_a.contains(extra_lisp.to_str().unwrap()),
+                "EMACSLOADPATH was not applied to child-a load-path: {s_a}"
+            );
+            assert!(
+                s_a.ends_with(r#" "alice")"#),
+                "USER env mismatch in child-a: {s_a}"
+            );
+
+            // Child B on the SAME zygote has no EMACSLOADPATH and a different cwd/USER.
+            let out_b = run_direct_on_socket(
+                &sock,
+                &program,
+                &cwd_b,
+                dir.path(),
+                "child-b",
+                &[("USER", "bob")],
+                inspect_form,
+            );
+            assert!(out_b.status.success(), "child-b failed: {out_b:?}");
+            let s_b = String::from_utf8_lossy(&out_b.stdout);
+            assert!(
+                s_b.starts_with(r#"(("child-cwd-b" "child-cwd-b" "child-cwd-b") "#),
+                "startup buffers did not update default-directory for child-b: {s_b}"
+            );
+            assert!(
+                !s_b.contains(extra_lisp.to_str().unwrap()),
+                "child-a EMACSLOADPATH leaked into child-b: {s_b}"
+            );
+            assert!(
+                s_b.ends_with(r#" "bob")"#),
+                "USER env mismatch in child-b: {s_b}"
+            );
+
+            let _ = server.kill();
+            let _ = server.wait();
+        }
     }
 }
